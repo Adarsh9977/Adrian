@@ -1,0 +1,96 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adrian-sdk-oss"
+version = "0.4.0"
+description = "Multi-agent security monitoring SDK for LangChain / LangGraph: paired-event capture, real-time classification, and block mode."
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Secure Agentics", email = "support@secureagentics.ai"}
+]
+keywords = [
+    "langchain",
+    "langgraph",
+    "ai",
+    "agents",
+    "security",
+    "monitoring",
+    "observability",
+    "llm",
+    "multi-agent",
+    "prompt-injection",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-core>=1.2.19,<2.0",
+    "protobuf>=5.29.0",
+    "websockets>=16.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.15.0",
+    "basedpyright>=1.38.0",
+    "langgraph==1.1.2",
+    "langgraph-prebuilt==1.0.8",
+    "langchain-mcp-adapters>=0.2.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/secureagentics/Adrian"
+Repository = "https://github.com/secureagentics/Adrian"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["adrian*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["adrian"]
+extend-exclude = ["adrian/proto"]
+
+[tool.ruff.lint]
+select = [
+  "D",     # pydocstyle: docstring enforcement
+]
+ignore = [
+  "D100",  # Missing docstring in public module
+  "D104",  # Missing docstring in public package
+  "D203",  # Conflicts with D211 (no-blank-line-before-class)
+  "D213",  # Conflicts with D212 (multi-line-summary-second-line)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests don't carry pydocstyle docstrings, the test name is the
+# docstring. Forcing D102 / D101 across the test tree was 99% of the
+# previous noise floor.
+"tests/*" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

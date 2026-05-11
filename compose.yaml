@@ -1,0 +1,139 @@
+# Compose orchestration for Adrian.
+#
+# Run from the repo root after `adrian-setup bootstrap` has populated
+# .env and seeded data/adrian.db. Bring the stack up (backend +
+# dashboard + bundled classifier; requires NVIDIA Container Toolkit):
+#
+#   docker compose --profile llm up -d
+#
+# One-shot bootstrap / reset / set-model use the setup profile:
+#
+#   docker compose --profile setup run --rm setup bootstrap --gguf gemma-4-e2b.gguf
+#   docker compose --profile setup run --rm setup reset-password
+#   docker compose --profile setup run --rm setup set-model --gguf gemma-4-e4b.gguf
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.backend
+    image: adrian-backend:local
+    # Build-only: never pull from a registry. Stops a future
+    # squatter who registers `adrian-backend:local` on Docker Hub
+    # from getting silently pulled and run.
+    pull_policy: build
+    container_name: adrian-backend
+    restart: unless-stopped
+    # .env is optional so `docker compose --profile setup run setup
+    # bootstrap` can run on a fresh clone before any .env exists.
+    # The bootstrap subcommand writes .env; subsequent `docker
+    # compose up` calls then find it.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ADRIAN_DB_PATH: /data/adrian.db
+      # Pin the in-container listen to 8080. ADRIAN_BACKEND_PORT in
+      # .env / env_file only controls the host-side mapping below; if
+      # we let the Go process read it too it would try to bind that
+      # host port inside its own netns and the published mapping would
+      # forward to a port nothing was listening on.
+      ADRIAN_BACKEND_PORT: "8080"
+    ports:
+      - "${ADRIAN_BACKEND_PORT:-8080}:8080"
+    volumes:
+      - ./data:/data
+      - ./models:/models:ro
+    # Distroless image has no shell / wget / curl, so the binary
+    # self-probes via `/adrian healthcheck` (HTTP-GET /readyz, exit
+    # 0/1). start_period covers the cold path: first DB open + the
+    # classifier upstream's first response (Llama.cpp model load can
+    # take 30-60 s on a fresh container).
+    healthcheck:
+      test: ["CMD", "/adrian", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    # Hold the backend off until the classifier is ready - eliminates
+    # the early-window where a SDK could connect, fail to classify, and
+    # (since the engine fails closed) halt every tool call.
+    depends_on:
+      llm:
+        condition: service_healthy
+        required: false
+
+  setup:
+    profiles: ["setup"]
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.setup
+    image: adrian-setup:local
+    pull_policy: build
+    volumes:
+      - .:/workspace
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.frontend
+    image: adrian-frontend:local
+    pull_policy: build
+    container_name: adrian-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${ADRIAN_DASHBOARD_PORT:-3000}:3000"
+
+  # Local classifier. Enable with the "llm" profile:
+  #   docker compose --profile llm up -d
+  #
+  # Hosts a GGUF model behind a Chat Completions endpoint at
+  # http://adrian-llm:8081/v1/chat/completions (the ADRIAN_LLM_URL
+  # value `bootstrap --gguf <name>` writes).
+  #
+  # NVIDIA GPU is required; the upstream
+  # ghcr.io/ggml-org/llama.cpp:server-cuda image bundles CUDA + the
+  # llama-server binary.
+  llm:
+    profiles: ["llm"]
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: adrian-llm
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "127.0.0.1:8081:8081"
+    # ADRIAN_LLM_MODEL_PATH is set by `setup bootstrap --gguf <name>` to
+    # the in-container path (e.g. /models/gemma-4-e2b.gguf). n-gpu-layers
+    # 99 offloads everything to the GPU; llama.cpp clamps to the model's
+    # actual layer count, so this is a safe upper bound.
+    command: >-
+      -m ${ADRIAN_LLM_MODEL_PATH:-/models/model.gguf}
+      --host 0.0.0.0
+      --port 8081
+      --ctx-size ${ADRIAN_LLM_CTX_SIZE:-8192}
+      --n-gpu-layers 99
+      --jinja
+    # llama-server exposes /health (returns 200 once the model is
+    # loaded and ready to accept requests) and /v1/models. The
+    # upstream image is Ubuntu-based and ships curl, so a shell-form
+    # check works. start_period covers the load: a 5 GB GGUF + GPU
+    # offload routinely takes 30-60 s on a cold container.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

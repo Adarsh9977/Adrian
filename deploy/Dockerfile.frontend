@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 SecureAgentics
+#
+# adrian-frontend: Next.js dashboard.
+# Build (from repo root):
+#   docker build -t adrian-frontend -f deploy/Dockerfile.frontend .
+
+# ----- builder -----
+FROM node:20-alpine AS build
+
+WORKDIR /src
+
+# package.json + package-lock.json define the exact dep tree we
+# vendor and review. `npm ci` errors if the two are out of sync and
+# never mutates the lockfile, so node_modules in every built image
+# matches what's checked in. `--no-audit --no-fund` keeps the build
+# log clean.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY frontend/ ./
+
+# ADRIAN_API_URL is consumed by next.config.js at BUILD time for the
+# /api/* rewrite. Default points at the compose service name so
+# `docker compose build` works out of the box.
+ARG ADRIAN_API_URL=http://backend:8080
+ENV ADRIAN_API_URL=$ADRIAN_API_URL
+
+RUN npm run build
+
+# ----- runtime -----
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+# Next.js standalone output: just the minimum needed to serve.
+COPY --from=build /src/.next/standalone ./
+COPY --from=build /src/.next/static ./.next/static
+COPY --from=build /src/public ./public
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

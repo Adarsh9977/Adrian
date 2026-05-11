@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 SecureAgentics
+#
+# adrian-backend: Go process serving the WebSocket SDK protocol +
+# dashboard REST API + in-process AI engine.
+#
+# Build (from repo root):
+#   docker build -t adrian-backend -f deploy/Dockerfile.backend .
+
+# ----- builder -----
+FROM golang:1.25-bookworm AS build
+
+WORKDIR /src
+
+# Copy module files first to cache the dep graph.
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+
+COPY backend/ ./
+
+ENV CGO_ENABLED=0 GOOS=linux
+
+RUN go build -trimpath -ldflags="-s -w" \
+    -o /out/adrian ./cmd/adrian
+
+# ----- runtime -----
+# Distroless static-debian12 runs as root by default; we keep it that
+# way so the backend can write to the bind-mounted ./data volume that
+# the adrian-setup bootstrap container also wrote (also as root). A
+# `:nonroot` tag here would create a UID mismatch on the bind-mount
+# and SQLite would fail to create its WAL files. The container is the
+# security boundary; the OS user inside it is not the gate.
+FROM gcr.io/distroless/static-debian12
+
+COPY --from=build /out/adrian /adrian
+
+# /data is the SQLite + credentials volume; /models is the GGUF
+# volume. Both are bind-mounted from the host by docker compose.
+VOLUME ["/data", "/models"]
+
+EXPOSE 8080
+
+ENTRYPOINT ["/adrian"]

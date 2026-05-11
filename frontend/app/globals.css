@@ -1,0 +1,93 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ */
+/* CSS Variables — light (default) and dark                           */
+/* ------------------------------------------------------------------ */
+
+:root {
+  --ink:             17 17 17;
+  --ink-2:           58 58 58;
+  --ink-3:           112 112 112;
+  --ink-4:           163 163 163;
+  --ink-5:           207 207 207;
+  --surface:         251 251 251;
+  --surface-raised:  255 255 255;
+  --surface-overlay: 245 245 245;
+  --surface-border:  236 236 236;
+  --surface-hover:   245 245 245;
+}
+
+.dark {
+  --ink:             245 245 245;
+  --ink-2:           218 218 218;
+  --ink-3:           161 161 168;
+  --ink-4:           113 113 122;
+  --ink-5:           82 82 91;
+  --surface:         10 10 11;
+  --surface-raised:  24 24 27;
+  --surface-overlay: 39 39 42;
+  --surface-border:  39 39 46;
+  --surface-hover:   32 32 37;
+}
+
+/* ------------------------------------------------------------------ */
+/* Base                                                               */
+/* ------------------------------------------------------------------ */
+
+html {
+  background: rgb(var(--surface));
+  color-scheme: light;
+  font-feature-settings: "tnum", "cv11", "ss01";
+}
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-surface text-ink antialiased font-sans;
+}
+
+::selection {
+  @apply bg-ink text-surface-raised;
+}
+
+/* ------------------------------------------------------------------ */
+/* Scrollbar                                                          */
+/* ------------------------------------------------------------------ */
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { @apply bg-surface; }
+::-webkit-scrollbar-thumb { @apply bg-surface-border rounded-full; }
+::-webkit-scrollbar-thumb:hover { @apply bg-ink-4; }
+
+/* ------------------------------------------------------------------ */
+/* Form elements                                                      */
+/* ------------------------------------------------------------------ */
+
+input, select, textarea {
+  @apply bg-surface-raised border border-surface-border text-ink placeholder-ink-4 rounded-lg;
+}
+input:focus, select:focus, textarea:focus {
+  @apply outline-none ring-2 ring-ink/10 border-ink-5;
+}
+
+/* ------------------------------------------------------------------ */
+/* Utilities                                                          */
+/* ------------------------------------------------------------------ */
+
+.table-row-hover:hover {
+  @apply bg-surface-hover;
+}
+
+.tabnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Prevent flash of unstyled content during theme init */
+html:not(.theme-ready) * {
+  transition: none !important;
+}

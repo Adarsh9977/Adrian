@@ -4,11 +4,11 @@ Thanks to everyone who has shaped Adrian. This file is maintained by hand; see t
 
 ## Core team
 
-- [Shahtaj Khalid](https://github.com/shahtajkhalid) - architecture and product
-- [Yanny](https://github.com/yanny-sec) - SDK and AI benchmarking
-- [Netan Mangal](https://github.com/netan-sa) - model fine-tuning
-- [Max Corbridge](https://github.com/max-c-sa) - full-stack
-- [Muhammad](https://github.com/Muhammad-at-sec) - (area)
+- [Shahtaj Khalid](https://github.com/shahtajkhalid)
+- [Yanny Christoforidis](https://github.com/yanny-sec)
+- [Netan Mangal](https://github.com/netan-sa) 
+- [Max Corbridge](https://github.com/max-c-sa)
+- [Muhammad Faizan](https://github.com/Muhammad-at-sec)
 
 ## Community
 

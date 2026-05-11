@@ -73,7 +73,7 @@ from langchain_core.runnables.config import ensure_config
 
 from adrian.proto import event_pb2 as pb
 
-__version__ = "0.4.0"
+__version__ = "1.0.0"
 __all__ = [
     "init",
     "shutdown",

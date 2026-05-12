@@ -1,6 +1,6 @@
 # Contributors
 
-Thanks to everyone who has shaped Adrian. This file is maintained by hand; see the bottom for how to add yourself.
+Thanks to everyone who has shaped Adrian. See the bottom for how to add yourself.
 
 ## Core team
 
@@ -23,5 +23,3 @@ Open a pull request adding your name to the relevant section, in alphabetical or
 ```
 
 If your contribution is not code (docs, design, testing, an issue report we acted on, a bug repro), say so in the description. Anything that materially shaped the project is worth listing.
-
-This file is not auto-generated. A listing here means we noticed and appreciate your contribution.

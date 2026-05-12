@@ -30,7 +30,7 @@ Adrian is an open-source, [AARM-aligned](https://aarm.dev) runtime security moni
   <a href="https://www.linkedin.com/company/secure-agentics">LinkedIn</a>
 </p>
 
-https://github.com/user-attachments/assets/79255615-c2bd-4e1e-9cfd-85685e15bec8
+https://github.com/user-attachments/assets/96974b9d-4862-41ac-a499-ef5cfe76e16a
 
 ## Why Adrian is different
 

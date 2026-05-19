@@ -207,3 +207,7 @@ Adrian is released under the [Apache 2.0 licence](LICENSE). New source files sho
 
 - [Discord](https://discord.gg/6nmJ9k3u6) for chat with the team and other Adrian users
 - [LinkedIn](https://www.linkedin.com/company/secure-agentics) for product updates
+
+## Featured on
+
+- [There's An AI For That](https://theresanaiforthat.com/ai/adrian/?ref=social-icon&v=10763736) <a href="https://theresanaiforthat.com/ai/adrian/?ref=social-icon&v=10763736" target="_blank" rel="nofollow"><img src="https://media.theresanaiforthat.com/social/icon_full.svg" alt="Featured on TAAFT" height="25"></a>

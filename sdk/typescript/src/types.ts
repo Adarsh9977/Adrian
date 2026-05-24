@@ -24,6 +24,12 @@ export interface TokenUsage {
   totalTokens: number;
 }
 
+export interface ErrorData {
+  name: string;
+  message: string;
+  stack?: string;
+}
+
 export interface ChatModelStartData {
   model: string;
   messages: ChatMessage[];
@@ -40,6 +46,7 @@ export interface LlmEndData {
   output: string;
   toolCalls: ToolCallRecord[];
   usage: TokenUsage | null;
+  error?: ErrorData;
 }
 
 export interface ToolStartData {
@@ -51,6 +58,7 @@ export interface ToolStartData {
 
 export interface ToolEndData {
   output: string;
+  error?: ErrorData;
 }
 
 export type EventData = ChatModelStartData | LlmStartData | LlmEndData | ToolStartData | ToolEndData;

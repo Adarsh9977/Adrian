@@ -77,6 +77,7 @@ export class EventPairBuffer {
         output: endData.output ?? "",
         toolCalls: endData.toolCalls ?? [],
         usage: endData.usage ?? null,
+        error: endData.error,
       },
       metadata: start.metadata,
     };
@@ -100,6 +101,7 @@ export class EventPairBuffer {
         toolCallId: startData.toolCallId ?? null,
         input: startData.input ?? "",
         output: endData.output ?? "",
+        error: endData.error,
       },
       metadata: start.metadata,
     };

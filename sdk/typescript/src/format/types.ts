@@ -1,4 +1,4 @@
-import type { CallbackMetadata, ChatMessage, TokenUsage, ToolCallRecord } from "../types.js";
+import type { CallbackMetadata, ChatMessage, ErrorData, TokenUsage, ToolCallRecord } from "../types.js";
 
 export interface AgentContext {
   agentId: string;
@@ -19,6 +19,7 @@ export interface LlmPairData {
   output: string;
   toolCalls: ToolCallRecord[];
   usage: TokenUsage | null;
+  error?: ErrorData;
 }
 
 export interface ToolPairData {
@@ -27,6 +28,7 @@ export interface ToolPairData {
   toolCallId: string | null;
   input: string;
   output: string;
+  error?: ErrorData;
 }
 
 export type PairType = "llm" | "tool";

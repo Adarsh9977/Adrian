@@ -5,7 +5,7 @@ import type { PairedEvent } from "./format/types.js";
 import { HookRegistry } from "./hooks.js";
 import { deriveAgentId } from "./identity.js";
 import { EventPairBuffer } from "./pairing.js";
-import type { CallbackMetadata, ChatMessage, EventData, EventRecord, LlmEndData, ToolCallRecord, ToolEndData, VerdictContext } from "./types.js";
+import type { CallbackMetadata, ChatMessage, ErrorData, EventData, EventRecord, LlmEndData, ToolCallRecord, ToolEndData, VerdictContext } from "./types.js";
 import type { Verdict } from "./proto/schema.js";
 
 export interface AdrianCallbackHandlerOptions {
@@ -82,6 +82,18 @@ export class AdrianCallbackHandler {
     }
   }
 
+  async handleLLMError(error: unknown, runId: string): Promise<void> {
+    const errorData = normalizeError(error);
+    const pair = this.pairBuffer.onEnd({
+      eventType: "llm_end",
+      data: { output: errorOutput(errorData), toolCalls: [], usage: null, error: errorData },
+      runId: String(runId),
+      invocationId: this.resolveInvocationId(),
+      sessionId: this.resolveSessionId(),
+    });
+    if (pair) await this.emitPair(pair);
+  }
+
   async handleToolStart(tool: Record<string, unknown>, input: string, runId: string, parentRunId?: string, extraParams?: Record<string, unknown>): Promise<void> {
     const metadata = extractMetadata(extraParams);
     let agentId = this.currentAgentId;
@@ -111,6 +123,18 @@ export class AdrianCallbackHandler {
     const pair = this.pairBuffer.onEnd({
       eventType: "tool_end",
       data,
+      runId: String(runId),
+      invocationId: this.resolveInvocationId(),
+      sessionId: this.resolveSessionId(),
+    });
+    if (pair) await this.emitPair(pair);
+  }
+
+  async handleToolError(error: unknown, runId: string): Promise<void> {
+    const errorData = normalizeError(error);
+    const pair = this.pairBuffer.onEnd({
+      eventType: "tool_end",
+      data: { output: errorOutput(errorData), error: errorData },
       runId: String(runId),
       invocationId: this.resolveInvocationId(),
       sessionId: this.resolveSessionId(),
@@ -184,6 +208,7 @@ function messageToChatMessage(message: unknown): ChatMessage {
 }
 
 function extractLlmEndData(output: unknown): LlmEndData {
+  if (isLlmEndData(output)) return output;
   const generations = (output as { generations?: unknown[][] })?.generations ?? [];
   const first = generations[0]?.[0] as Record<string, unknown> | undefined;
   const text = typeof first?.text === "string" ? first.text : "";
@@ -205,6 +230,27 @@ function extractLlmEndData(output: unknown): LlmEndData {
       totalTokens: Number(usageObj.totalTokens ?? usageObj.total_tokens ?? 0),
     } : null,
   };
+}
+
+function isLlmEndData(output: unknown): output is LlmEndData {
+  if (!output || typeof output !== "object") return false;
+  const obj = output as Record<string, unknown>;
+  return typeof obj.output === "string" && Array.isArray(obj.toolCalls) && ("usage" in obj);
+}
+
+function normalizeError(error: unknown): ErrorData {
+  if (error instanceof Error) {
+    return {
+      name: error.name || "Error",
+      message: error.message,
+      ...(error.stack ? { stack: error.stack } : {}),
+    };
+  }
+  return { name: "Error", message: stringifyOutput(error) };
+}
+
+function errorOutput(error: ErrorData): string {
+  return `[ERROR] ${error.name}: ${error.message}`;
 }
 
 function stringifyOutput(output: unknown): string {

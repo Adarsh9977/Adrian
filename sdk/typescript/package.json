@@ -37,14 +37,22 @@
     "prompt-injection"
   ],
   "peerDependencies": {
+    "ai": ">=4.0.0",
     "@langchain/core": ">=0.3.0",
-    "@langchain/langgraph": ">=0.2.0"
+    "@langchain/langgraph": ">=0.2.0",
+    "openai": ">=4.0.0"
   },
   "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    },
     "@langchain/core": {
       "optional": true
     },
     "@langchain/langgraph": {
+      "optional": true
+    },
+    "openai": {
       "optional": true
     }
   },

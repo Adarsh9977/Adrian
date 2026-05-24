@@ -112,3 +112,5 @@ export * from "./types.js";
 export * from "./format/types.js";
 export * from "./pii/index.js";
 export * from "./proto/schema.js";
+export * from "./instrumentation/openai.js";
+export * from "./instrumentation/vercel.js";

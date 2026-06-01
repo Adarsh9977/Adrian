@@ -67,10 +67,11 @@ type EventFilters struct {
 
 // InsertEvent persists one paired event. The payload column holds the
 // full JSON-encoded PairedEvent blob; downstream readers (dashboard,
-// engine) re-decode it as needed.
+// engine) re-decode it as needed. SDK retries can replay the same
+// event_id, so duplicate primary-key inserts are ignored.
 func (s *Store) InsertEvent(ctx context.Context, e *Event) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO events
+		`INSERT OR IGNORE INTO events
 		   (id, session_id, agent_id, agent_profile_id, event_type, run_id, payload, tokens_used)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, e.SessionID, e.AgentID, e.AgentProfileID, e.EventType, e.RunID, e.PayloadJSON, e.TokensUsed)

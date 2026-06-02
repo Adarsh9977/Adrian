@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -156,6 +157,100 @@ func TestRoundTrip(t *testing.T) {
 
 	_ = conn.WriteMessage(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+}
+
+func TestDuplicateEventRetryKeepsWSOpen(t *testing.T) {
+	db := openInMemoryDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+
+	st := store.New(db)
+	plaintextKey := "adr_local_test_key_retry"
+	keyHash := sha256Hex(plaintextKey)
+	insertAPIKey(t, db, keyHash)
+	if _, err := db.Exec(`UPDATE policies SET mode = 'block' WHERE id = 1`); err != nil {
+		t.Fatalf("set mode=block: %v", err)
+	}
+
+	var classifyCalls int32
+	mux := http.NewServeMux()
+	mux.Handle("/ws", ws.AuthMiddleware(st)(ws.NewHandler(st, &fakeClassifier{calls: &classifyCalls}, ws.NewHub(), nil, nil)))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	header := http.Header{"Authorization": {"Bearer " + plaintextKey}}
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if err := writeProto(conn, &bpb.ClientFrame{
+		Frame: &bpb.ClientFrame_Login{Login: &bpb.SessionLogin{
+			SessionId: "retry-sess", SchemaVersion: 2,
+		}},
+	}); err != nil {
+		t.Fatalf("send login: %v", err)
+	}
+	if _, err := readServerFrame(conn); err != nil {
+		t.Fatalf("read login_ack: %v", err)
+	}
+
+	eventID := uuid.NewString()
+	batchFrame := &bpb.ClientFrame{
+		Frame: &bpb.ClientFrame_PairedBatch{PairedBatch: &bpb.PairedEventBatch{
+			Events: []*bpb.PairedEvent{{
+				EventId: eventID, SessionId: "retry-sess",
+				RunId:    "run-retry",
+				PairType: bpb.PairType_PAIR_TYPE_TOOL,
+				Agent:    &bpb.AgentContext{AgentId: "retry-agent"},
+				Data: &bpb.PairedEvent_Tool{Tool: &bpb.ToolPairData{
+					ToolName: "noop", ToolCallId: "tc-retry", Input: "{}", Output: "ok",
+				}},
+			}},
+		}},
+	}
+
+	if err := writeProto(conn, batchFrame); err != nil {
+		t.Fatalf("send first paired_batch: %v", err)
+	}
+	firstVerdict, err := readServerFrame(conn)
+	if err != nil {
+		t.Fatalf("read first verdict: %v", err)
+	}
+	if got := firstVerdict.GetVerdict().GetEventId(); got != eventID {
+		t.Fatalf("first verdict event_id = %q, want %q", got, eventID)
+	}
+
+	if err := writeProto(conn, batchFrame); err != nil {
+		t.Fatalf("send retry paired_batch: %v", err)
+	}
+	retryVerdict, err := readServerFrame(conn)
+	if err != nil {
+		t.Fatalf("read retry verdict after duplicate event insert: %v", err)
+	}
+	if got := retryVerdict.GetVerdict().GetEventId(); got != eventID {
+		t.Fatalf("retry verdict event_id = %q, want %q", got, eventID)
+	}
+
+	var eventRows int
+	if err := db.QueryRow("SELECT count(*) FROM events WHERE id = ?", eventID).Scan(&eventRows); err != nil {
+		t.Fatalf("query events: %v", err)
+	}
+	if eventRows != 1 {
+		t.Fatalf("expected duplicate retry to keep 1 event row, got %d", eventRows)
+	}
+
+	var verdictRows int
+	if err := db.QueryRow("SELECT count(*) FROM verdicts WHERE event_id = ?", eventID).Scan(&verdictRows); err != nil {
+		t.Fatalf("query verdicts: %v", err)
+	}
+	if verdictRows != 1 {
+		t.Fatalf("expected duplicate retry to keep 1 verdict row, got %d", verdictRows)
+	}
+	if got := atomic.LoadInt32(&classifyCalls); got != 1 {
+		t.Fatalf("expected classifier to run once for duplicate retry, got %d calls", got)
+	}
 }
 
 // TestAlertModeNoFanOut confirms the mode gate withholds Verdict
@@ -363,9 +458,14 @@ func TestUnauthDial(t *testing.T) {
 // helpers
 // -----------------------------------------------------------------
 
-type fakeClassifier struct{}
+type fakeClassifier struct {
+	calls *int32
+}
 
 func (f *fakeClassifier) Classify(_ context.Context, _ *bpb.PairedEvent, _ string) (*engine.Verdict, error) {
+	if f.calls != nil {
+		atomic.AddInt32(f.calls, 1)
+	}
 	return &engine.Verdict{MADCode: "M0", Classification: "benign"}, nil
 }
 

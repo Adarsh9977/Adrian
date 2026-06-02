@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -170,8 +171,9 @@ func TestDuplicateEventRetryKeepsWSOpen(t *testing.T) {
 		t.Fatalf("set mode=block: %v", err)
 	}
 
+	var classifyCalls int32
 	mux := http.NewServeMux()
-	mux.Handle("/ws", ws.AuthMiddleware(st)(ws.NewHandler(st, &fakeClassifier{}, ws.NewHub(), nil, nil)))
+	mux.Handle("/ws", ws.AuthMiddleware(st)(ws.NewHandler(st, &fakeClassifier{calls: &classifyCalls}, ws.NewHub(), nil, nil)))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -237,6 +239,17 @@ func TestDuplicateEventRetryKeepsWSOpen(t *testing.T) {
 	}
 	if eventRows != 1 {
 		t.Fatalf("expected duplicate retry to keep 1 event row, got %d", eventRows)
+	}
+
+	var verdictRows int
+	if err := db.QueryRow("SELECT count(*) FROM verdicts WHERE event_id = ?", eventID).Scan(&verdictRows); err != nil {
+		t.Fatalf("query verdicts: %v", err)
+	}
+	if verdictRows != 1 {
+		t.Fatalf("expected duplicate retry to keep 1 verdict row, got %d", verdictRows)
+	}
+	if got := atomic.LoadInt32(&classifyCalls); got != 1 {
+		t.Fatalf("expected classifier to run once for duplicate retry, got %d calls", got)
 	}
 }
 
@@ -445,9 +458,14 @@ func TestUnauthDial(t *testing.T) {
 // helpers
 // -----------------------------------------------------------------
 
-type fakeClassifier struct{}
+type fakeClassifier struct {
+	calls *int32
+}
 
 func (f *fakeClassifier) Classify(_ context.Context, _ *bpb.PairedEvent, _ string) (*engine.Verdict, error) {
+	if f.calls != nil {
+		atomic.AddInt32(f.calls, 1)
+	}
 	return &engine.Verdict{MADCode: "M0", Classification: "benign"}, nil
 }
 

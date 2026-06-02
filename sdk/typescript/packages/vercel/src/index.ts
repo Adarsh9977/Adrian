@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { runWithInvocationId } from "../context.js";
-import { getHandler } from "../index.js";
-import type { CallbackMetadata, LlmEndData, ToolCallRecord } from "../types.js";
-import { captureLlmCall, emptyLlmEnd, messagesFromPromptLike, normalizeUsage, parseToolArgs, stringifyContent } from "./common.js";
+import { getHandler, runWithInvocationId } from "@secureagentics/adrian";
+import type { CallbackMetadata, LlmEndData, ToolCallRecord } from "@secureagentics/adrian";
+import { captureLlmCall, emptyLlmEnd, messagesFromPromptLike, normalizeUsage, parseToolArgs, stringifyContent } from "@secureagentics/adrian/capture";
 
-export interface VercelAIInstrumentationOptions {
+export interface AdrianOptions {
   metadata?: CallbackMetadata | null;
 }
 
-export interface VercelAIToolCallLike {
+export interface ToolCallLike {
   toolCallId?: string;
   id?: string;
   toolName?: string;
@@ -16,7 +15,7 @@ export interface VercelAIToolCallLike {
   args?: unknown;
 }
 
-export interface VercelAIToolCallCaptureOptions {
+export interface ToolCaptureOptions {
   metadata?: CallbackMetadata | null;
   parentRunId?: string;
 }
@@ -25,21 +24,27 @@ type VercelToolExecute = (args: unknown, options?: unknown, ...rest: unknown[]) 
 
 const VERCEL_METHODS = new Set(["generateText", "streamText", "generateObject", "streamObject"]);
 
-export function instrumentVercelAI<T extends Record<PropertyKey, unknown>>(ai: T, options: VercelAIInstrumentationOptions = {}): T {
-  return new Proxy(ai, {
-    get(target, prop, receiver) {
-      const value = Reflect.get(target, prop, receiver);
-      if (!VERCEL_METHODS.has(String(prop)) || typeof value !== "function") return value;
-      return function adrianVercelAI(this: unknown, args: Record<string, unknown> = {}, ...rest: unknown[]) {
-        return captureVercelCall(String(prop), () => value.call(this, args, ...rest), args, options);
-      };
-    },
-  });
+/** Wrap a Vercel AI SDK module or tools object so Adrian captures LLM and tool events. */
+export function adrian<T>(target: T, options: AdrianOptions = {}): T {
+  if (!target || typeof target !== "object") return target;
+
+  if ("generateText" in target || "streamText" in target) {
+    return wrapAiModule(target as Record<PropertyKey, unknown>, options) as T;
+  }
+
+  const keys = Object.keys(target);
+  if (keys.length > 0 && keys.every((k) => {
+    const val = (target as Record<string, unknown>)[k];
+    return val && typeof val === "object" && ("execute" in val || "description" in val);
+  })) {
+    return adrianTools(target as Record<string, unknown>, options) as T;
+  }
+
+  return target;
 }
 
-export const withAdrianVercelAI = instrumentVercelAI;
-
-export function instrumentVercelAITools<T extends Record<string, unknown>>(tools: T, options: VercelAIToolCallCaptureOptions = {}): T {
+/** Wrap Vercel AI SDK tool definitions so Adrian captures tool execution events. */
+export function adrianTools<T extends Record<string, unknown>>(tools: T, options: ToolCaptureOptions = {}): T {
   return Object.fromEntries(Object.entries(tools).map(([toolName, toolDef]) => {
     if (!toolDef || typeof toolDef !== "object") return [toolName, toolDef];
     const execute = (toolDef as { execute?: unknown }).execute;
@@ -49,7 +54,7 @@ export function instrumentVercelAITools<T extends Record<string, unknown>>(tools
       ...(toolDef as Record<string, unknown>),
       execute(this: unknown, args: unknown, executionOptions?: unknown, ...rest: unknown[]) {
         const toolCallId = extractToolCallId(executionOptions);
-        return captureVercelAIToolCall({
+        return captureTool({
           toolCallId,
           toolName,
           args,
@@ -59,10 +64,11 @@ export function instrumentVercelAITools<T extends Record<string, unknown>>(tools
   })) as T;
 }
 
-export async function captureVercelAIToolCall<T>(
-  toolCall: VercelAIToolCallLike,
+/** Wrap manual Vercel AI SDK tool execution so Adrian captures tool events. */
+export async function captureTool<T>(
+  toolCall: ToolCallLike,
   execute: () => T | Promise<T>,
-  options: VercelAIToolCallCaptureOptions = {},
+  options: ToolCaptureOptions = {},
 ): Promise<T> {
   const handler = getHandler();
   if (!handler) return execute();
@@ -86,9 +92,34 @@ export async function captureVercelAIToolCall<T>(
   });
 }
 
-export const captureAITool = captureVercelAIToolCall;
+/** @deprecated Use adrian instead */
+export const instrumentVercelAI = adrian;
+/** @deprecated Use adrian instead */
+export const instrument = adrian;
+/** @deprecated Use adrian instead */
+export const withAdrianVercelAI = adrian;
+/** @deprecated Use adrianTools instead */
+export const instrumentVercelAITools = adrianTools;
+/** @deprecated Use captureTool instead */
+export const captureVercelAITool = captureTool;
+/** @deprecated Use captureTool instead */
+export const captureVercelAIToolCall = captureTool;
+/** @deprecated Use captureTool instead */
+export const captureAITool = captureTool;
 
-function captureVercelCall<T>(operation: string, execute: () => T, args: Record<string, unknown>, options: VercelAIInstrumentationOptions): unknown {
+function wrapAiModule<T extends Record<PropertyKey, unknown>>(ai: T, options: AdrianOptions = {}): T {
+  return new Proxy(ai, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (!VERCEL_METHODS.has(String(prop)) || typeof value !== "function") return value;
+      return function adrianVercelAI(this: unknown, args: Record<string, unknown> = {}, ...rest: unknown[]) {
+        return captureVercelCall(String(prop), () => value.call(this, args, ...rest), args, options);
+      };
+    },
+  });
+}
+
+function captureVercelCall<T>(operation: string, execute: () => T, args: Record<string, unknown>, options: AdrianOptions): unknown {
   const model = extractModelName(args.model);
   const metadata = integrationMetadata(options.metadata, operation);
   const result = execute();
@@ -158,3 +189,14 @@ function extractToolCallId(executionOptions: unknown): string {
 function integrationMetadata(metadata: CallbackMetadata | null | undefined, operation: string): CallbackMetadata {
   return { ...(metadata ?? {}), adrianIntegration: "vercel-ai", operation };
 }
+
+export {
+  init,
+  shutdown,
+  getHandler,
+  getWebSocketClient,
+  version,
+  __version__,
+} from "@secureagentics/adrian";
+
+export type { EventData, InitOptions } from "@secureagentics/adrian";

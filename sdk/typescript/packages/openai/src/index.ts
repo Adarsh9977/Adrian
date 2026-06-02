@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { runWithInvocationId } from "../context.js";
-import { getHandler } from "../index.js";
-import type { CallbackMetadata, LlmEndData, ToolCallRecord } from "../types.js";
+import { getHandler, runWithInvocationId } from "@secureagentics/adrian";
+import type { CallbackMetadata, LlmEndData, ToolCallRecord } from "@secureagentics/adrian";
 import {
   captureLlmAsyncIterable,
   captureLlmCall,
@@ -11,13 +10,13 @@ import {
   normalizeUsage,
   parseToolArgs,
   stringifyContent,
-} from "./common.js";
+} from "@secureagentics/adrian/capture";
 
-export interface OpenAIInstrumentationOptions {
+export interface AdrianOptions {
   metadata?: CallbackMetadata | null;
 }
 
-export interface OpenAIToolCallLike {
+export interface ToolCallLike {
   id: string;
   type?: string;
   function?: {
@@ -28,12 +27,13 @@ export interface OpenAIToolCallLike {
   arguments?: string;
 }
 
-export interface OpenAIToolCallCaptureOptions {
+export interface ToolCaptureOptions {
   metadata?: CallbackMetadata | null;
   parentRunId?: string;
 }
 
-export function instrumentOpenAI<T extends object>(client: T, options: OpenAIInstrumentationOptions = {}): T {
+/** Wrap an OpenAI client so Adrian captures LLM and tool events. */
+export function adrian<T extends object>(client: T, options: AdrianOptions = {}): T {
   return new Proxy(client, {
     get(target, prop, receiver) {
       if (prop === "chat") return instrumentChat(Reflect.get(target, prop, receiver), options);
@@ -43,12 +43,11 @@ export function instrumentOpenAI<T extends object>(client: T, options: OpenAIIns
   });
 }
 
-export const withAdrianOpenAI = instrumentOpenAI;
-
-export async function captureOpenAIToolCall<T>(
-  toolCall: OpenAIToolCallLike,
+/** Wrap manual OpenAI tool execution so Adrian captures tool events. */
+export async function captureTool<T>(
+  toolCall: ToolCallLike,
   execute: () => T | Promise<T>,
-  options: OpenAIToolCallCaptureOptions = {},
+  options: ToolCaptureOptions = {},
 ): Promise<T> {
   const handler = getHandler();
   if (!handler) return execute();
@@ -72,7 +71,18 @@ export async function captureOpenAIToolCall<T>(
   });
 }
 
-function instrumentChat(chat: unknown, options: OpenAIInstrumentationOptions): unknown {
+/** @deprecated Use adrian instead */
+export const instrumentOpenAI = adrian;
+/** @deprecated Use adrian instead */
+export const instrument = adrian;
+/** @deprecated Use adrian instead */
+export const withAdrianOpenAI = adrian;
+/** @deprecated Use captureTool instead */
+export const captureOpenAITool = captureTool;
+/** @deprecated Use captureTool instead */
+export const captureOpenAIToolCall = captureTool;
+
+function instrumentChat(chat: unknown, options: AdrianOptions): unknown {
   if (!chat || typeof chat !== "object") return chat;
   return new Proxy(chat as Record<PropertyKey, unknown>, {
     get(target, prop, receiver) {
@@ -82,7 +92,7 @@ function instrumentChat(chat: unknown, options: OpenAIInstrumentationOptions): u
   });
 }
 
-function instrumentChatCompletions(completions: unknown, options: OpenAIInstrumentationOptions): unknown {
+function instrumentChatCompletions(completions: unknown, options: AdrianOptions): unknown {
   if (!completions || typeof completions !== "object") return completions;
   return new Proxy(completions as Record<PropertyKey, unknown>, {
     get(target, prop, receiver) {
@@ -103,7 +113,7 @@ function instrumentChatCompletions(completions: unknown, options: OpenAIInstrume
   });
 }
 
-function instrumentResponses(responses: unknown, options: OpenAIInstrumentationOptions): unknown {
+function instrumentResponses(responses: unknown, options: AdrianOptions): unknown {
   if (!responses || typeof responses !== "object") return responses;
   return new Proxy(responses as Record<PropertyKey, unknown>, {
     get(target, prop, receiver) {
@@ -226,3 +236,14 @@ function integrationMetadata(metadata: CallbackMetadata | null | undefined, oper
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
   return Boolean(value && typeof value === "object" && Symbol.asyncIterator in value);
 }
+
+export {
+  init,
+  shutdown,
+  getHandler,
+  getWebSocketClient,
+  version,
+  __version__,
+} from "@secureagentics/adrian";
+
+export type { EventData, InitOptions } from "@secureagentics/adrian";

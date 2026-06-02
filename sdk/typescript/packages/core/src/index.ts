@@ -6,8 +6,8 @@ import { HookRegistry } from "./hooks.js";
 import { patchMcpAdapters, mcpServers } from "./mcp.js";
 import { EventPairBuffer } from "./pairing.js";
 import { RedactingHandler } from "./pii/index.js";
+import { getHandler, getWebSocketClient, setRuntime } from "./registry.js";
 import { envAwareResolveSessionId } from "./sessionPersistence.js";
-import { autoInstrument } from "./instrumentation/langchain.js";
 import { WebSocketClient } from "./ws.js";
 import type { EventHandler, McpServer } from "./types.js";
 
@@ -15,8 +15,6 @@ export const version = "1.0.0";
 export const __version__ = version;
 
 let hooks: HookRegistry | null = null;
-let handler: AdrianCallbackHandler | null = null;
-let wsClient: WebSocketClient | null = null;
 
 export async function init(options: InitOptions = {}): Promise<void> {
   const apiKey = options.apiKey ?? process.env.ADRIAN_API_KEY ?? null;
@@ -45,6 +43,7 @@ export async function init(options: InitOptions = {}): Promise<void> {
   setConfig(config);
 
   const handlerList: EventHandler[] = options.handlers ? [...options.handlers] : [new JSONLHandler(logFile)];
+  let wsClient: WebSocketClient | null = null;
   if (!options.handlers && wsUrl) {
     if (!apiKey) console.warn("ADRIAN wsUrl is set but no apiKey was provided; the server will reject the connection.");
     wsClient = new WebSocketClient({
@@ -61,34 +60,25 @@ export async function init(options: InitOptions = {}): Promise<void> {
 
   hooks = new HookRegistry();
   for (const eventHandler of handlerList.map((h) => new RedactingHandler(h))) hooks.register(eventHandler);
-  handler = new AdrianCallbackHandler({ pairBuffer: new EventPairBuffer(), contextTracker: new AgentContextTracker(), hooks, config });
+  const handler = new AdrianCallbackHandler({ pairBuffer: new EventPairBuffer(), contextTracker: new AgentContextTracker(), hooks, config });
+  setRuntime(handler, wsClient);
   if (wsClient) {
     wsClient.handler = handler;
     wsClient.scheduleConnect();
   }
 
   await patchMcpAdapters();
-  if (options.autoInstrument ?? true) await autoInstrument(getHandler, getWebSocketClient);
 }
 
 export async function shutdown(): Promise<void> {
   await hooks?.close();
   hooks = null;
-  handler = null;
-  wsClient = null;
+  setRuntime(null, null);
   setConfig(null);
 }
 
-export function getHandler(): AdrianCallbackHandler | null {
-  return handler;
-}
-
-export function getWebSocketClient(): WebSocketClient | null {
-  return wsClient;
-}
-
 async function sendMcpInventory(): Promise<void> {
-  await wsClient?.sendMcpInventory(mcpServers());
+  await getWebSocketClient()?.sendMcpInventory(mcpServers());
 }
 
 function chainMcpServerCallback(userCallback: ((server: McpServer) => void | Promise<void>) | null) {
@@ -107,10 +97,9 @@ export { deriveAgentId, deriveLangGraphAgentId } from "./identity.js";
 export { WebSocketClient, shouldHalt } from "./ws.js";
 export { mcpServers, registerMcpServer, registerMcpConnection } from "./mcp.js";
 export { resolveSessionId, envAwareResolveSessionId } from "./sessionPersistence.js";
+export { getHandler, getWebSocketClient } from "./registry.js";
 export * from "./config.js";
 export * from "./types.js";
 export * from "./format/types.js";
 export * from "./pii/index.js";
 export * from "./proto/schema.js";
-export * from "./instrumentation/openai.js";
-export * from "./instrumentation/vercel.js";

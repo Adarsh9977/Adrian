@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { setConfig } from "../src/config.js";
-import { blockedToolNodeResponse } from "../src/instrumentation/langchain.js";
-import { Mode, type Verdict } from "../src/proto/schema.js";
-import type { WebSocketClient } from "../src/ws.js";
+import { init, shutdown, type EventData } from "@secureagentics/adrian";
+import { setConfig, Mode, type Verdict, type WebSocketClient } from "@secureagentics/adrian";
+import { blockedToolNodeResponse } from "../src/index.js";
 
 function config(): Parameters<typeof setConfig>[0] {
   return {

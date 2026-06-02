@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { captureAITool, captureVercelAIToolCall, init, instrumentVercelAI, instrumentVercelAITools, shutdown } from "../src/index.js";
-import type { EventData } from "../src/types.js";
+import { init, shutdown, type EventData } from "@secureagentics/adrian";
+import { captureTool, adrian, adrianTools } from "../src/index.js";
 
 describe("Vercel AI SDK instrumentation", () => {
   afterEach(async () => {
@@ -9,7 +9,7 @@ describe("Vercel AI SDK instrumentation", () => {
 
   it("captures generateText calls as paired LLM events", async () => {
     const events: EventData[] = [];
-    const ai = instrumentVercelAI({
+    const ai = adrian({
       generateText: async (_args: Record<string, unknown>) => ({
         text: "hello from vercel",
         toolCalls: [{ toolCallId: "tool-1", toolName: "search", args: { query: "adrian" } }],
@@ -17,7 +17,7 @@ describe("Vercel AI SDK instrumentation", () => {
       }),
     });
 
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
       events.push(data);
     } });
     const result = await ai.generateText({
@@ -39,7 +39,7 @@ describe("Vercel AI SDK instrumentation", () => {
 
   it("emits streamText events when the result promises settle", async () => {
     const events: EventData[] = [];
-    const ai = instrumentVercelAI({
+    const ai = adrian({
       streamText: (_args: Record<string, unknown>) => ({
         text: Promise.resolve("streamed"),
         toolCalls: Promise.resolve([]),
@@ -47,7 +47,7 @@ describe("Vercel AI SDK instrumentation", () => {
       }),
     });
 
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
       events.push(data);
     } });
     const result = await ai.streamText({ model: "gpt-4o", messages: [{ role: "user", content: "hi" }] });
@@ -64,11 +64,11 @@ describe("Vercel AI SDK instrumentation", () => {
 
   it("captures local Vercel AI tool execution as a tool event", async () => {
     const events: Array<{ type: string; data: EventData }> = [];
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
       events.push({ type, data });
     } });
 
-    const result = await captureVercelAIToolCall({
+    const result = await captureTool({
       toolCallId: "tool-weather",
       toolName: "getWeather",
       args: { city: "San Francisco" },
@@ -90,11 +90,11 @@ describe("Vercel AI SDK instrumentation", () => {
 
   it("captures local Vercel AI tool errors as tool events", async () => {
     const events: Array<{ type: string; data: EventData }> = [];
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
       events.push({ type, data });
     } });
 
-    await expect(captureAITool({
+    await expect(captureTool({
       toolCallId: "tool-weather",
       toolName: "getWeather",
       args: { city: "San Francisco" },
@@ -116,14 +116,14 @@ describe("Vercel AI SDK instrumentation", () => {
 
   it("wraps Vercel AI SDK tool execute functions", async () => {
     const events: Array<{ type: string; data: EventData }> = [];
-    const tools = instrumentVercelAITools({
+    const tools = adrianTools({
       getWeather: {
         description: "Get current weather for a city.",
         execute: async ({ city }: { city: string }, _options?: unknown) => ({ city, temperatureF: 58 }),
       },
     });
 
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
       events.push({ type, data });
     } });
 
@@ -140,5 +140,46 @@ describe("Vercel AI SDK instrumentation", () => {
         output: "{\"city\":\"San Francisco\",\"temperatureF\":58}",
       },
     });
+  });
+
+  it("wraps Vercel AI SDK via adrian()", async () => {
+    const events: EventData[] = [];
+    const ai = adrian({
+      generateText: async () => ({
+        text: "hello from vercel",
+      }),
+    });
+
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+      events.push(data);
+    } });
+
+    await ai.generateText({
+      model: "gpt-4o",
+      prompt: "hello",
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ model: "gpt-4o", output: "hello from vercel" });
+  });
+
+  it("wraps Vercel tools via adrian()", async () => {
+    const events: Array<{ type: string; data: EventData }> = [];
+    const tools = adrian({
+      getWeather: {
+        description: "Get weather",
+        execute: async ({ city }: { city: string }) => ({ city, temp: 72 }),
+      },
+    });
+
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
+      events.push({ type, data });
+    } });
+
+    await tools.getWeather.execute({ city: "SF" });
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("tool");
+    expect(events[0].data).toMatchObject({ toolName: "getWeather", input: '{"city":"SF"}' });
   });
 });

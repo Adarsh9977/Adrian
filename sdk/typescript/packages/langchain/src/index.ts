@@ -1,24 +1,37 @@
 import { randomUUID } from "node:crypto";
-import type { AdrianCallbackHandler } from "../handler.js";
-import { runWithInvocationId } from "../context.js";
-import { shouldHalt, type WebSocketClient } from "../ws.js";
-import { currentConfig } from "../config.js";
+import { currentConfig, getHandler, getWebSocketClient, runWithInvocationId, shouldHalt } from "@secureagentics/adrian";
+import type { AdrianCallbackHandler, WebSocketClient } from "@secureagentics/adrian";
 
 let patched = false;
 const CALLBACK_METHODS = ["invoke", "stream", "batch", "ainvoke", "astream"] as const;
 const GRAPH_METHODS = ["invoke", "stream", "ainvoke", "astream"] as const;
 const TOOL_NODE_METHODS = ["invoke", "ainvoke"] as const;
 
-export async function autoInstrument(getHandler: () => AdrianCallbackHandler | null, getWebSocketClient: () => WebSocketClient | null): Promise<void> {
+/** Enable Adrian instrumentation for LangChain.js and LangGraph.js. */
+export async function adrian(): Promise<void> {
+  return adrianWith(getHandler, getWebSocketClient);
+}
+
+export async function adrianWith(
+  getHandlerFn: () => AdrianCallbackHandler | null,
+  getWebSocketClientFn: () => WebSocketClient | null,
+): Promise<void> {
   if (patched) return;
   patched = true;
   await Promise.allSettled([
-    patchRunnable(getHandler),
-    patchBaseChatModel(getHandler),
-    patchLangGraph(getHandler),
-    patchToolNode(getHandler, getWebSocketClient),
+    patchRunnable(getHandlerFn),
+    patchBaseChatModel(getHandlerFn),
+    patchLangGraph(getHandlerFn),
+    patchToolNode(getHandlerFn, getWebSocketClientFn),
   ]);
 }
+
+/** @deprecated Use adrian instead */
+export const instrumentLangChain = adrian;
+/** @deprecated Use adrianWith instead */
+export const instrumentLangChainWith = adrianWith;
+/** @deprecated Use adrian instead */
+export const autoInstrument = adrian;
 
 function injectCallbacks(config: unknown, handler: AdrianCallbackHandler | null): unknown {
   if (!handler) return config ?? {};
@@ -34,7 +47,7 @@ function injectCallbacks(config: unknown, handler: AdrianCallbackHandler | null)
   return next;
 }
 
-async function patchRunnable(getHandler: () => AdrianCallbackHandler | null): Promise<void> {
+async function patchRunnable(getHandlerFn: () => AdrianCallbackHandler | null): Promise<void> {
   const mod = await importOptional("@langchain/core/runnables");
   const proto = (mod?.Runnable as { prototype?: Record<string, unknown>; _adrianPatched?: boolean } | undefined)?.prototype;
   if (!proto || (mod.Runnable as { _adrianPatched?: boolean })._adrianPatched) return;
@@ -42,13 +55,13 @@ async function patchRunnable(getHandler: () => AdrianCallbackHandler | null): Pr
     const original = proto[name];
     if (typeof original !== "function") continue;
     proto[name] = function patchedInvoke(input: unknown, config?: unknown, ...rest: unknown[]) {
-      return original.call(this, input, injectCallbacks(config, getHandler()), ...rest);
+      return original.call(this, input, injectCallbacks(config, getHandlerFn()), ...rest);
     };
   }
   (mod.Runnable as { _adrianPatched?: boolean })._adrianPatched = true;
 }
 
-async function patchBaseChatModel(getHandler: () => AdrianCallbackHandler | null): Promise<void> {
+async function patchBaseChatModel(getHandlerFn: () => AdrianCallbackHandler | null): Promise<void> {
   const mod = await importOptional("@langchain/core/language_models/chat_models");
   const proto = (mod?.BaseChatModel as { prototype?: Record<string, unknown>; _adrianPatched?: boolean } | undefined)?.prototype;
   if (!proto || (mod.BaseChatModel as { _adrianPatched?: boolean })._adrianPatched) return;
@@ -56,13 +69,13 @@ async function patchBaseChatModel(getHandler: () => AdrianCallbackHandler | null
     const original = proto[name];
     if (typeof original !== "function") continue;
     proto[name] = function patchedChatInvoke(input: unknown, config?: unknown, ...rest: unknown[]) {
-      return original.call(this, input, injectCallbacks(config, getHandler()), ...rest);
+      return original.call(this, input, injectCallbacks(config, getHandlerFn()), ...rest);
     };
   }
   (mod.BaseChatModel as { _adrianPatched?: boolean })._adrianPatched = true;
 }
 
-async function patchLangGraph(getHandler: () => AdrianCallbackHandler | null): Promise<void> {
+async function patchLangGraph(getHandlerFn: () => AdrianCallbackHandler | null): Promise<void> {
   const mod = await importOptional("@langchain/langgraph");
   const graphClasses = [mod?.CompiledStateGraph, mod?.StateGraph, mod?.Pregel].filter(Boolean) as Array<{ prototype?: Record<string, unknown>; _adrianPatched?: boolean }>;
   for (const cls of graphClasses) {
@@ -72,7 +85,7 @@ async function patchLangGraph(getHandler: () => AdrianCallbackHandler | null): P
       const original = proto[name];
       if (typeof original !== "function") continue;
       proto[name] = function patchedGraphInvoke(input: unknown, config?: unknown, ...rest: unknown[]) {
-        const run = () => original.call(this, input, injectCallbacks(config, getHandler()), ...rest);
+        const run = () => original.call(this, input, injectCallbacks(config, getHandlerFn()), ...rest);
         return runWithInvocationId(randomUUID(), run);
       };
     }
@@ -80,7 +93,7 @@ async function patchLangGraph(getHandler: () => AdrianCallbackHandler | null): P
   }
 }
 
-async function patchToolNode(getHandler: () => AdrianCallbackHandler | null, getWebSocketClient: () => WebSocketClient | null): Promise<void> {
+async function patchToolNode(getHandlerFn: () => AdrianCallbackHandler | null, getWebSocketClientFn: () => WebSocketClient | null): Promise<void> {
   const mod = await importOptional("@langchain/langgraph/prebuilt");
   const cls = mod?.ToolNode as { prototype?: Record<string, unknown>; _adrianPatched?: boolean } | undefined;
   const proto = cls?.prototype;
@@ -89,8 +102,8 @@ async function patchToolNode(getHandler: () => AdrianCallbackHandler | null, get
     const original = proto[name];
     if (typeof original !== "function") continue;
     proto[name] = async function patchedToolNodeInvoke(input: unknown, config?: unknown, ...rest: unknown[]) {
-      const nextConfig = injectCallbacks(config, getHandler());
-      const blockedResponse = await blockedToolNodeResponse(input, getWebSocketClient());
+      const nextConfig = injectCallbacks(config, getHandlerFn());
+      const blockedResponse = await blockedToolNodeResponse(input, getWebSocketClientFn());
       if (blockedResponse) return blockedResponse;
       return original.call(this, input, nextConfig, ...rest);
     };
@@ -134,3 +147,14 @@ async function importOptional(specifier: string): Promise<any | null> {
     return null;
   }
 }
+
+export {
+  init,
+  shutdown,
+  getHandler,
+  getWebSocketClient,
+  version,
+  __version__,
+} from "@secureagentics/adrian";
+
+export type { EventData, InitOptions } from "@secureagentics/adrian";

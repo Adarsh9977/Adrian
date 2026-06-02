@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { captureOpenAIToolCall, init, instrumentOpenAI, shutdown } from "../src/index.js";
-import type { EventData } from "../src/types.js";
+import { init, shutdown, type EventData } from "@secureagentics/adrian";
+import { captureTool, adrian } from "../src/index.js";
 
 describe("OpenAI instrumentation", () => {
   afterEach(async () => {
@@ -9,7 +9,7 @@ describe("OpenAI instrumentation", () => {
 
   it("captures chat completion calls as paired LLM events", async () => {
     const events: EventData[] = [];
-    const client = instrumentOpenAI({
+    const client = adrian({
       chat: {
         completions: {
           create: async (_body: Record<string, unknown>) => ({
@@ -28,7 +28,7 @@ describe("OpenAI instrumentation", () => {
       },
     });
 
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
       events.push(data);
     } });
     const result = await client.chat.completions.create({
@@ -49,7 +49,7 @@ describe("OpenAI instrumentation", () => {
 
   it("captures responses API calls", async () => {
     const events: EventData[] = [];
-    const client = instrumentOpenAI({
+    const client = adrian({
       responses: {
           create: async (_body: Record<string, unknown>) => ({
           output_text: "done",
@@ -59,7 +59,7 @@ describe("OpenAI instrumentation", () => {
       },
     });
 
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
       events.push(data);
     } });
     await client.responses.create({ model: "gpt-4.1", input: "run lookup" });
@@ -74,7 +74,7 @@ describe("OpenAI instrumentation", () => {
 
   it("captures camelCase chat tool calls", async () => {
     const events: EventData[] = [];
-    const client = instrumentOpenAI({
+    const client = adrian({
       chat: {
         completions: {
           create: async (_body: Record<string, unknown>) => ({
@@ -93,7 +93,7 @@ describe("OpenAI instrumentation", () => {
       },
     });
 
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
       events.push(data);
     } });
     await client.chat.completions.create({ model: "gpt-4o-mini", messages: [{ role: "user", content: "use search" }] });
@@ -114,13 +114,13 @@ describe("OpenAI instrumentation", () => {
       yield { type: "response.function_call_arguments.delta", item_id: "item-1", delta: ":7}" };
       yield { type: "response.output_text.delta", delta: "is ready." };
     }
-    const client = instrumentOpenAI({
+    const client = adrian({
       responses: {
         create: async (_body: Record<string, unknown>) => stream(),
       },
     });
 
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
       events.push(data);
     } });
     const result = await client.responses.create({ model: "gpt-4.1", input: "lookup id 7", stream: true });
@@ -142,7 +142,7 @@ describe("OpenAI instrumentation", () => {
       yield { choices: [{ delta: { content: "first " } }] };
       yield { choices: [{ delta: { content: "second" } }] };
     }
-    const client = instrumentOpenAI({
+    const client = adrian({
       chat: {
         completions: {
           create: async (_body: Record<string, unknown>) => stream(),
@@ -150,7 +150,7 @@ describe("OpenAI instrumentation", () => {
       },
     });
 
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
       events.push(data);
     } });
     const result = await client.chat.completions.create({ model: "gpt-4o-mini", messages: [{ role: "user", content: "stream" }], stream: true });
@@ -167,11 +167,11 @@ describe("OpenAI instrumentation", () => {
 
   it("captures local OpenAI tool execution as a tool event", async () => {
     const events: Array<{ type: string; data: EventData }> = [];
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
       events.push({ type, data });
     } });
 
-    const result = await captureOpenAIToolCall({
+    const result = await captureTool({
       id: "call-weather",
       type: "function",
       function: { name: "get_weather", arguments: "{\"city\":\"San Francisco\"}" },
@@ -193,11 +193,11 @@ describe("OpenAI instrumentation", () => {
 
   it("captures local OpenAI tool execution errors as tool events", async () => {
     const events: Array<{ type: string; data: EventData }> = [];
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
       events.push({ type, data });
     } });
 
-    await expect(captureOpenAIToolCall({
+    await expect(captureTool({
       id: "call-weather",
       type: "function",
       function: { name: "get_weather", arguments: "{\"city\":\"San Francisco\"}" },
@@ -219,7 +219,7 @@ describe("OpenAI instrumentation", () => {
 
   it("captures OpenAI request errors as LLM events", async () => {
     const events: Array<{ type: string; data: EventData }> = [];
-    const client = instrumentOpenAI({
+    const client = adrian({
       chat: {
         completions: {
           create: async (_body: Record<string, unknown>) => {
@@ -229,7 +229,7 @@ describe("OpenAI instrumentation", () => {
       },
     });
 
-    await init({ handlers: [], autoInstrument: false, sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (type, data) => {
       events.push({ type, data });
     } });
 
@@ -247,5 +247,30 @@ describe("OpenAI instrumentation", () => {
         error: { name: "Error", message: "rate limited" },
       },
     });
+  });
+
+  it("wraps OpenAI client via adrian()", async () => {
+    const events: EventData[] = [];
+    const client = adrian({
+      chat: {
+        completions: {
+          create: async (_body: Record<string, unknown>) => ({
+            choices: [{ message: { content: "hello" } }],
+          }),
+        },
+      },
+    });
+
+    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+      events.push(data);
+    } });
+
+    await client.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ model: "gpt-4o", output: "hello" });
   });
 });

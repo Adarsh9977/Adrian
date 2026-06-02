@@ -36,7 +36,6 @@ export interface InitOptions {
   apiKey?: string | null;
   logFile?: string;
   handlers?: import("./types.js").EventHandler[] | null;
-  autoInstrument?: boolean;
   logLevel?: string | null;
   wsUrl?: string | null;
   sessionId?: string | null;

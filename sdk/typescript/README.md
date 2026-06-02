@@ -1,105 +1,173 @@
-# @secureagentics/adrian
+# Adrian TypeScript SDK
 
-TypeScript SDK for Adrian multi-agent event capture in Node.js LangChain.js, LangGraph.js, OpenAI SDK, and Vercel AI SDK applications.
+Monorepo for the Adrian TypeScript SDK. Pick the package for your framework — the core SDK is installed automatically.
+
+## Packages
+
+| Package | npm name | Install | Import |
+|---|---|---|---|
+| OpenAI | `@secureagentics/adrian-openai` | `npm install @secureagentics/adrian-openai openai` | `import { init, adrian, captureTool } from "@secureagentics/adrian-openai"` |
+| Vercel AI | `@secureagentics/adrian-vercel` | `npm install @secureagentics/adrian-vercel ai` | `import { init, adrian, adrianTools, captureTool } from "@secureagentics/adrian-vercel"` |
+| LangChain | `@secureagentics/adrian-langchain` | `npm install @secureagentics/adrian-langchain @langchain/core @langchain/langgraph` | `import { init, adrian } from "@secureagentics/adrian-langchain"` |
+| Core only | `@secureagentics/adrian` | `npm install @secureagentics/adrian` | `import { init, shutdown } from "@secureagentics/adrian"` |
+
+Provider packages depend on `@secureagentics/adrian` and re-export `init`, `shutdown`, and other core APIs — one install, one import.
+
+## Two-step setup
+
+1. **`init()`** — starts the event pipeline (JSONL, WebSocket, PII redaction).
+2. **`adrian()`** — connects your framework to Adrian.
+
+Both come from the same provider package:
 
 ```ts
-import { init } from "@secureagentics/adrian";
+// OpenAI
+import { init, adrian, captureTool } from "@secureagentics/adrian-openai";
+
+// Vercel AI
+import { init, adrian, adrianTools, captureTool } from "@secureagentics/adrian-vercel";
+
+// LangChain / LangGraph
+import { init, adrian } from "@secureagentics/adrian-langchain";
 
 await init({ apiKey: process.env.ADRIAN_API_KEY });
 ```
 
-The SDK mirrors the Python package: it pairs LLM/tool callbacks into `PairedEvent` objects, redacts PII, writes JSONL locally, streams protobuf frames to the Adrian WebSocket endpoint, tracks MCP servers, and applies BLOCK/HITL tool gating when LangGraph ToolNode instrumentation is available.
+## Unified API
 
-## OpenAI SDK
+All provider packages export the **same function names**:
+
+| Export | OpenAI | Vercel AI | LangChain |
+|---|---|---|---|
+| `init` / `shutdown` | Re-exported from core | Re-exported from core | Re-exported from core |
+| `adrian(...)` | Wrap an OpenAI client | Wrap an AI module or tools object | Enable callbacks (no arguments) |
+| `adrianTools(...)` | — | Wrap tool definitions for `generateText` | — |
+| `captureTool(...)` | Capture manual tool execution | Capture manual tool execution | — |
+
+Shared option types (same names in every provider package):
+
+| Type | Purpose |
+|---|---|
+| `AdrianOptions` | Optional metadata when wrapping a client or module |
+| `ToolCallLike` | Shape of a tool call passed to `captureTool` |
+| `ToolCaptureOptions` | Optional metadata when capturing tool execution |
+
+## Examples
+
+### OpenAI
+
+```bash
+npm install @secureagentics/adrian-openai openai
+```
 
 ```ts
 import OpenAI from "openai";
-import { init, instrumentOpenAI } from "@secureagentics/adrian";
+import { init, shutdown, adrian, captureTool } from "@secureagentics/adrian-openai";
 
 await init({ apiKey: process.env.ADRIAN_API_KEY });
 
-const openai = instrumentOpenAI(new OpenAI());
-await openai.chat.completions.create({
+const openai = adrian(new OpenAI());
+
+const response = await openai.chat.completions.create({
   model: "gpt-4o-mini",
   messages: [{ role: "user", content: "Hello" }],
 });
-```
 
-`instrumentOpenAI` captures `chat.completions.create` and `responses.create` calls. Streaming chat completions are captured when the returned async iterable is consumed.
-
-OpenAI returns tool call requests, but your app executes the tools. Wrap that local execution with `captureOpenAIToolCall` to emit Adrian tool events:
-
-```ts
-import { captureOpenAIToolCall } from "@secureagentics/adrian";
-
-for (const toolCall of assistantMessage.tool_calls ?? []) {
-  const toolResult = await captureOpenAIToolCall(toolCall, () =>
-    runTool(toolCall.function.name, toolCall.function.arguments),
-  );
-
-  messages.push({
-    role: "tool",
-    tool_call_id: toolCall.id,
-    content: toolResult,
-  });
+for (const toolCall of response.choices[0].message.tool_calls ?? []) {
+  await captureTool(toolCall, () => runTool(toolCall.function.name, toolCall.function.arguments));
 }
+
+await shutdown();
 ```
 
-## Vercel AI SDK
+### Vercel AI SDK
+
+```bash
+npm install @secureagentics/adrian-vercel ai
+```
 
 ```ts
 import * as ai from "ai";
-import { init, instrumentVercelAI } from "@secureagentics/adrian";
+import { init, shutdown, adrian, adrianTools, captureTool } from "@secureagentics/adrian-vercel";
 
 await init({ apiKey: process.env.ADRIAN_API_KEY });
 
-const adrianAI = instrumentVercelAI(ai);
-await adrianAI.generateText({
+const monitored = adrian(ai);
+
+const result = await monitored.generateText({
   model,
-  prompt: "Hello",
+  prompt: "What's the weather in London?",
+  tools: adrianTools(tools),
 });
-```
-
-`instrumentVercelAI` wraps `generateText`, `streamText`, `generateObject`, and `streamObject`. Stream results are emitted after the Vercel result promises such as `text`, `toolCalls`, and `usage` settle.
-
-If you pass Vercel AI SDK tools with `execute` functions, wrap the tools object before passing it to `generateText`:
-
-```ts
-import { instrumentVercelAITools } from "@secureagentics/adrian";
-
-const result = await adrianAI.generateText({
-  model,
-  prompt: "Use the weather tool.",
-  tools: instrumentVercelAITools(tools),
-});
-```
-
-If your app executes Vercel AI SDK tool calls manually, wrap that execution with `captureVercelAIToolCall` or the shorter `captureAITool` alias:
-
-```ts
-import { captureAITool } from "@secureagentics/adrian";
 
 for (const toolCall of result.toolCalls ?? []) {
-  const toolResult = await captureAITool(toolCall, () =>
-    runTool(toolCall.toolName, toolCall.args),
-  );
+  await captureTool(toolCall, () => runTool(toolCall.toolName, toolCall.args));
 }
+
+await shutdown();
 ```
 
-## Environment
+### LangChain / LangGraph
 
-- `ADRIAN_API_KEY`
-- `ADRIAN_LOG_FILE`
-- `ADRIAN_WS_URL`
-- `ADRIAN_SESSION_ID`
-- `ADRIAN_BLOCK_TIMEOUT`
-- `ADRIAN_REPLAY_BUFFER_FRAMES`
-
-## Manual Callback Wiring
+```bash
+npm install @secureagentics/adrian-langchain @langchain/core @langchain/langgraph
+```
 
 ```ts
-import { init, getHandler } from "@secureagentics/adrian";
+import { init, shutdown, adrian } from "@secureagentics/adrian-langchain";
 
-await init({ autoInstrument: false });
-const handler = getHandler();
+await init({ apiKey: process.env.ADRIAN_API_KEY });
+await adrian();
+
+// Your normal LangChain / LangGraph code runs here.
+
+await shutdown();
 ```
+
+## Using multiple providers
+
+Install each provider package you need. Core is deduplicated to a single copy:
+
+```bash
+npm install @secureagentics/adrian-openai @secureagentics/adrian-vercel openai ai
+```
+
+```ts
+import { init, adrian as adrianOpenAI } from "@secureagentics/adrian-openai";
+import { adrian as adrianVercel } from "@secureagentics/adrian-vercel";
+import { adrian as adrianLangChain } from "@secureagentics/adrian-langchain";
+
+await init({ apiKey: process.env.ADRIAN_API_KEY });
+await adrianLangChain();
+
+const openai = adrianOpenAI(new OpenAI());
+const monitored = adrianVercel(vercelAi);
+```
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `ADRIAN_API_KEY` | API key from the Adrian dashboard |
+| `ADRIAN_LOG_FILE` | Local JSONL log path (default: `events.jsonl`) |
+| `ADRIAN_WS_URL` | WebSocket endpoint (default: `ws://localhost:8080/ws`) |
+| `ADRIAN_SESSION_ID` | Session identifier for grouping events |
+| `ADRIAN_BLOCK_TIMEOUT` | Seconds to wait for a BLOCK/HITL verdict |
+| `ADRIAN_REPLAY_BUFFER_FRAMES` | WebSocket replay buffer size |
+
+## Development
+
+```bash
+npm install
+npm run build
+npm test
+```
+
+Build or test a single package:
+
+```bash
+npm run build -w @secureagentics/adrian
+npm test -w @secureagentics/adrian-openai
+```
+
+Per-package docs: [core](./packages/core) · [openai](./packages/openai) · [vercel](./packages/vercel) · [langchain](./packages/langchain)

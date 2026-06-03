@@ -71,17 +71,6 @@ export async function captureTool<T>(
   });
 }
 
-/** @deprecated Use adrian instead */
-export const instrumentOpenAI = adrian;
-/** @deprecated Use adrian instead */
-export const instrument = adrian;
-/** @deprecated Use adrian instead */
-export const withAdrianOpenAI = adrian;
-/** @deprecated Use captureTool instead */
-export const captureOpenAITool = captureTool;
-/** @deprecated Use captureTool instead */
-export const captureOpenAIToolCall = captureTool;
-
 function instrumentChat(chat: unknown, options: AdrianOptions): unknown {
   if (!chat || typeof chat !== "object") return chat;
   return new Proxy(chat as Record<PropertyKey, unknown>, {

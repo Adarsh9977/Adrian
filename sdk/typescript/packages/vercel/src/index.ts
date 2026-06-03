@@ -92,21 +92,6 @@ export async function captureTool<T>(
   });
 }
 
-/** @deprecated Use adrian instead */
-export const instrumentVercelAI = adrian;
-/** @deprecated Use adrian instead */
-export const instrument = adrian;
-/** @deprecated Use adrian instead */
-export const withAdrianVercelAI = adrian;
-/** @deprecated Use adrianTools instead */
-export const instrumentVercelAITools = adrianTools;
-/** @deprecated Use captureTool instead */
-export const captureVercelAITool = captureTool;
-/** @deprecated Use captureTool instead */
-export const captureVercelAIToolCall = captureTool;
-/** @deprecated Use captureTool instead */
-export const captureAITool = captureTool;
-
 function wrapAiModule<T extends Record<PropertyKey, unknown>>(ai: T, options: AdrianOptions = {}): T {
   return new Proxy(ai, {
     get(target, prop, receiver) {

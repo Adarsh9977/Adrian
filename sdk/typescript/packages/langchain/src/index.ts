@@ -26,13 +26,6 @@ export async function adrianWith(
   ]);
 }
 
-/** @deprecated Use adrian instead */
-export const instrumentLangChain = adrian;
-/** @deprecated Use adrianWith instead */
-export const instrumentLangChainWith = adrianWith;
-/** @deprecated Use adrian instead */
-export const autoInstrument = adrian;
-
 function injectCallbacks(config: unknown, handler: AdrianCallbackHandler | null): unknown {
   if (!handler) return config ?? {};
   const next = { ...((config && typeof config === "object") ? config as Record<string, unknown> : {}) };

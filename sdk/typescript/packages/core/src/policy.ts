@@ -1,7 +1,7 @@
 import { currentConfig } from "./config.js";
 import { shouldHalt, type WebSocketClient } from "./ws.js";
 
-/** Tool result content returned when LangGraph ToolNode execution is blocked. */
+/** Tool result content returned when tool execution is blocked by policy. */
 export const BLOCKED_TOOL_MESSAGE = "[BLOCKED by security policy]";
 
 export type GateToolCallsReason = "missing_tool_call_id" | "policy_halt" | "verdict_timeout";

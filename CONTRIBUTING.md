@@ -29,7 +29,7 @@ source .venv/bin/activate
 pre-commit install          # wires the git hook
 ```
 
-The TypeScript SDK lives at `sdk/typescript/` as an npm workspace with four packages (`core`, `openai`, `vercel`, `langchain`). From that directory:
+The TypeScript SDK lives at `sdk/typescript/` as an npm workspace with three packages (`core`, `openai`, `vercel`). From that directory:
 
 ```sh
 cd sdk/typescript

@@ -93,7 +93,7 @@ export { JSONLHandler } from "./handlers/jsonl.js";
 export { HookRegistry } from "./hooks.js";
 export { EventPairBuffer } from "./pairing.js";
 export { AgentContextTracker, getInvocationId, runWithInvocationId } from "./context.js";
-export { deriveAgentId, deriveLangGraphAgentId } from "./identity.js";
+export { deriveAgentId } from "./identity.js";
 export { WebSocketClient, shouldHalt } from "./ws.js";
 export { AdrianPolicyBlockedError, BLOCKED_TOOL_MESSAGE, assertToolCallsAllowed, gateToolCallIds } from "./policy.js";
 export type { GateToolCallsReason, GateToolCallsResult } from "./policy.js";

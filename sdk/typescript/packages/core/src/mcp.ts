@@ -24,7 +24,7 @@ export function registerMcpConnection(name: string, connection: unknown): void {
 }
 
 export async function patchMcpAdapters(): Promise<void> {
-  await Promise.allSettled([patchLangchainMcpAdapters(), patchMcpTransports()]);
+  await patchMcpTransports();
 }
 
 function serverFromConnection(name: string, connection: unknown): McpServer {
@@ -44,21 +44,6 @@ function endpointFor(transport: string, conn: Record<string, unknown>): string {
   return "";
 }
 
-async function patchLangchainMcpAdapters(): Promise<void> {
-  const mod = await importOptional("langchain-mcp-adapters");
-  const Client = mod?.MultiServerMCPClient ?? mod?.client?.MultiServerMCPClient;
-  if (!Client || Client._adrianMcpPatched) return;
-  const original = Client.prototype.constructor;
-  const originalInit = Client.prototype.__init__ ?? original;
-  if (typeof originalInit !== "function") return;
-  Client.prototype.__init__ = function patchedInit(...args: unknown[]) {
-    const result = originalInit.apply(this, args);
-    registerAllFromClient(this as Record<string, unknown>);
-    return result;
-  };
-  Client._adrianMcpPatched = true;
-}
-
 async function patchMcpTransports(): Promise<void> {
   const targets: Array<[string, string, string]> = [
     ["@modelcontextprotocol/sdk/client/stdio.js", "stdio_client", "stdio"],
@@ -75,12 +60,6 @@ async function patchMcpTransports(): Promise<void> {
     };
     mod[attr]._adrianMcpPatched = true;
   }
-}
-
-function registerAllFromClient(client: Record<string, unknown>): void {
-  const connections = client.connections;
-  if (!connections || typeof connections !== "object") return;
-  for (const [name, connection] of Object.entries(connections)) registerMcpConnection(name, connection);
 }
 
 function registerSynthesised(transport: string, endpoint: string): void {

@@ -8,7 +8,6 @@ Monorepo for the Adrian TypeScript SDK. Pick the package for your framework — 
 |---|---|---|---|
 | OpenAI | `@secureagentics/adrian-openai` | `npm install @secureagentics/adrian-openai openai` | `import { init, adrian, captureTool } from "@secureagentics/adrian-openai"` |
 | Vercel AI | `@secureagentics/adrian-vercel` | `npm install @secureagentics/adrian-vercel ai` | `import { init, adrian, adrianTools, captureTool } from "@secureagentics/adrian-vercel"` |
-| LangChain | `@secureagentics/adrian-langchain` | `npm install @secureagentics/adrian-langchain @langchain/core @langchain/langgraph` | `import { init, adrian } from "@secureagentics/adrian-langchain"` |
 | Core only | `@secureagentics/adrian` | `npm install @secureagentics/adrian` | `import { init, shutdown } from "@secureagentics/adrian"` |
 
 Provider packages depend on `@secureagentics/adrian` and re-export `init`, `shutdown`, and other core APIs — one install, one import.
@@ -27,9 +26,6 @@ import { init, adrian, captureTool } from "@secureagentics/adrian-openai";
 // Vercel AI
 import { init, adrian, adrianTools, captureTool } from "@secureagentics/adrian-vercel";
 
-// LangChain / LangGraph
-import { init, adrian } from "@secureagentics/adrian-langchain";
-
 await init({ apiKey: process.env.ADRIAN_API_KEY });
 ```
 
@@ -37,12 +33,12 @@ await init({ apiKey: process.env.ADRIAN_API_KEY });
 
 All provider packages export the **same function names**:
 
-| Export | OpenAI | Vercel AI | LangChain |
-|---|---|---|---|
-| `init` / `shutdown` | Re-exported from core | Re-exported from core | Re-exported from core |
-| `adrian(...)` | Wrap an OpenAI client | Wrap an AI module or tools object | Enable callbacks (no arguments) |
-| `adrianTools(...)` | — | Wrap tool definitions for `generateText` | — |
-| `captureTool(...)` | Capture manual tool execution | Capture manual tool execution | — |
+| Export | OpenAI | Vercel AI |
+|---|---|---|
+| `init` / `shutdown` | Re-exported from core | Re-exported from core |
+| `adrian(...)` | Wrap an OpenAI client | Wrap an AI module or tools object |
+| `adrianTools(...)` | — | Wrap tool definitions for `generateText` |
+| `captureTool(...)` | Capture manual tool execution | Capture manual tool execution |
 
 Shared option types (same names in every provider package):
 
@@ -107,23 +103,6 @@ for (const toolCall of result.toolCalls ?? []) {
 await shutdown();
 ```
 
-### LangChain / LangGraph
-
-```bash
-npm install @secureagentics/adrian-langchain @langchain/core @langchain/langgraph
-```
-
-```ts
-import { init, shutdown, adrian } from "@secureagentics/adrian-langchain";
-
-await init({ apiKey: process.env.ADRIAN_API_KEY });
-await adrian();
-
-// Your normal LangChain / LangGraph code runs here.
-
-await shutdown();
-```
-
 ## Using multiple providers
 
 Install each provider package you need. Core is deduplicated to a single copy:
@@ -135,10 +114,8 @@ npm install @secureagentics/adrian-openai @secureagentics/adrian-vercel openai a
 ```ts
 import { init, adrian as adrianOpenAI } from "@secureagentics/adrian-openai";
 import { adrian as adrianVercel } from "@secureagentics/adrian-vercel";
-import { adrian as adrianLangChain } from "@secureagentics/adrian-langchain";
 
 await init({ apiKey: process.env.ADRIAN_API_KEY });
-await adrianLangChain();
 
 const openai = adrianOpenAI(new OpenAI());
 const monitored = adrianVercel(vercelAi);
@@ -170,4 +147,4 @@ npm run build -w @secureagentics/adrian
 npm test -w @secureagentics/adrian-openai
 ```
 
-Per-package docs: [core](./packages/core) · [openai](./packages/openai) · [vercel](./packages/vercel) · [langchain](./packages/langchain)
+Per-package docs: [core](./packages/core) · [openai](./packages/openai) · [vercel](./packages/vercel)

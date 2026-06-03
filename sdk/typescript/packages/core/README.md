@@ -36,7 +36,7 @@ await shutdown();
 | `shutdown()` | Flush handlers and tear down |
 | `getHandler()` | Access the callback handler for manual wiring |
 | `getWebSocketClient()` | Access the WebSocket client |
-| `AdrianCallbackHandler` | LangChain-compatible callback class |
+| `AdrianCallbackHandler` | Event callback handler class |
 | `JSONLHandler` | Local JSONL event sink |
 
 ## Environment

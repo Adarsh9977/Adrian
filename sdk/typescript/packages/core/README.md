@@ -60,4 +60,4 @@ const handler = getHandler();
 
 ## Subpath export
 
-`@secureagentics/adrian/capture` exposes shared LLM capture helpers used internally by the OpenAI and Vercel provider packages. Most apps should use `adrian()` from a provider package instead.
+`@secureagentics/adrian/capture` exposes shared LLM capture helpers used internally by provider packages. Most apps should use `adrian()` from a provider package instead.

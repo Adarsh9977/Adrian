@@ -2,6 +2,8 @@
 
 Monorepo for the Adrian TypeScript SDK. Pick the package for your framework - the core SDK is installed automatically.
 
+The core package owns the event pipeline: event pairing, PII redaction, JSONL logging, WebSocket streaming, policy verdicts, and shared capture helpers. Provider packages, such as OpenAI, adapt framework-specific request and response shapes into that core pipeline.
+
 ## Packages
 
 | Package | npm name | Install | Import |
@@ -52,7 +54,7 @@ npm install @secureagentics/adrian-openai openai
 
 ```ts
 import OpenAI from "openai";
-import { init, shutdown, adrian, captureTool } from "@secureagentics/adrian-openai";
+import { init, shutdown, adrian } from "@secureagentics/adrian-openai";
 
 await init({ apiKey: process.env.ADRIAN_API_KEY });
 
@@ -63,11 +65,114 @@ const response = await openai.chat.completions.create({
   messages: [{ role: "user", content: "Hello" }],
 });
 
-for (const toolCall of response.choices[0].message.tool_calls ?? []) {
-  await captureTool(toolCall, () => runTool(toolCall.function.name, toolCall.function.arguments));
+await shutdown();
+```
+
+### OpenAI tool execution
+
+OpenAI returns tool call requests; your app still executes the tools. Wrap that execution with `captureTool` so Adrian can apply BLOCK/HITL policy and capture the tool result:
+
+```ts
+import OpenAI from "openai";
+import { init, shutdown, adrian, captureTool, AdrianPolicyBlockedError, BLOCKED_TOOL_MESSAGE } from "@secureagentics/adrian-openai";
+
+await init({ apiKey: process.env.ADRIAN_API_KEY });
+
+const openai = adrian(new OpenAI());
+const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+  { role: "user", content: "What is the weather in Paris?" },
+];
+
+async function getWeather(city: string) {
+  return { city, forecast: "sunny" };
+}
+
+const response = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages,
+  tools: [
+    {
+      type: "function",
+      function: {
+        name: "get_weather",
+        description: "Get the current weather for a city",
+        parameters: {
+          type: "object",
+          properties: { city: { type: "string" } },
+          required: ["city"],
+        },
+      },
+    },
+  ],
+});
+
+const assistantMessage = response.choices[0]?.message;
+if (!assistantMessage) throw new Error("OpenAI response did not include an assistant message");
+
+messages.push(assistantMessage);
+
+for (const toolCall of assistantMessage.tool_calls ?? []) {
+  let toolResult: unknown;
+
+  try {
+    toolResult = await captureTool(toolCall, async () => {
+      const args = JSON.parse(toolCall.function.arguments || "{}") as { city?: string };
+      return getWeather(args.city ?? "");
+    });
+  } catch (error) {
+    if (!(error instanceof AdrianPolicyBlockedError)) throw error;
+    toolResult = BLOCKED_TOOL_MESSAGE;
+  }
+
+  messages.push({
+    role: "tool",
+    tool_call_id: toolCall.id,
+    content: typeof toolResult === "string" ? toolResult : JSON.stringify(toolResult),
+  });
 }
 
 await shutdown();
+```
+
+### Responses API
+
+```ts
+const response = await openai.responses.create({
+  model: "gpt-4o-mini",
+  input: "Summarize the security considerations for this workflow.",
+});
+
+console.log(response.output_text);
+```
+
+### Streaming
+
+Streaming calls are passed through unchanged. Adrian emits one paired event when the stream finishes or the consumer exits early:
+
+```ts
+const stream = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [{ role: "user", content: "Write a short haiku." }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
+}
+```
+
+### Local logging only
+
+Use `wsUrl: null` when you want JSONL logging without connecting to the Adrian backend:
+
+```ts
+await init({
+  wsUrl: null,
+  logFile: "events.jsonl",
+  onEvent: (eventType, data, runId, parentRunId, eventId) => {
+    console.log({ eventType, runId, parentRunId, eventId, data });
+  },
+});
 ```
 
 ## Environment variables

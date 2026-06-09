@@ -34,7 +34,7 @@ export async function captureLlmCall<T>(
 
   const runId = randomUUID();
   return runWithInvocationId(randomUUID(), async () => {
-    await handler.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata ?? null });
+    await handler.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
     try {
       const result = await execute();
       const endData = await extractOutput(result);
@@ -63,7 +63,7 @@ export function captureLlmAsyncIterable<T>(
   const invocationId = randomUUID();
 
   async function* wrapped(): AsyncGenerator<T> {
-    await handler?.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata ?? null });
+    await handler?.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
     yield* runWithInvocationId(invocationId, async function* () {
       let emitted = false;
       let failed = false;
@@ -99,18 +99,50 @@ export function normalizeMessages(input: unknown): ChatMessage[] {
   return input.map((message) => {
     const obj = message && typeof message === "object" ? message as Record<string, unknown> : {};
     return {
-      role: String(obj.role ?? "unknown"),
-      content: stringifyContent(obj.content ?? obj.text ?? ""),
+      role: String(obj.role),
+      content: stringifyContent(obj.content ?? obj.text),
     };
   });
 }
 
 export function messagesFromPromptLike(args: Record<string, unknown>): ChatMessage[] {
+  const system = args.instructions;
   const messages = normalizeMessages(args.messages);
-  if (messages.length > 0) return prependSystem(args.system, messages);
-  if (typeof args.prompt === "string") return prependSystem(args.system, [{ role: "user", content: args.prompt }]);
-  if (typeof args.input === "string") return prependSystem(args.system, [{ role: "user", content: args.input }]);
-  return prependSystem(args.system, []);
+  if (messages.length > 0) return prependSystem(system, messages);
+  if (typeof args.input === "string") return prependSystem(system, [{ role: "user", content: args.input }]);
+  const inputMessages = normalizeResponseInput(args.input);
+  if (inputMessages.length > 0) return prependSystem(system, inputMessages);
+  return prependSystem(system, []);
+}
+
+/** Normalise OpenAI Responses API `input` arrays (roles, tool calls, tool outputs). */
+export function normalizeResponseInput(input: unknown): ChatMessage[] {
+  if (!Array.isArray(input)) return [];
+  const messages: ChatMessage[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const type = String(obj.type);
+
+    if (type === "function_call" || type === "tool_call") {
+      const name = String(obj.name);
+      const args = typeof obj.arguments === "string" ? obj.arguments : stringifyJson(obj.arguments);
+      messages.push({ role: "assistant", content: `[tool_call:${name}] ${args}` });
+      continue;
+    }
+    if (type === "function_call_output") {
+      messages.push({ role: "tool", content: String(obj.output) });
+      continue;
+    }
+
+    const role = String(obj.role);
+    if (!role) continue;
+    messages.push({
+      role: role === "developer" ? "system" : role,
+      content: stringifyContent(obj.content ?? obj.text),
+    });
+  }
+  return messages;
 }
 
 export function stringifyContent(value: unknown): string {

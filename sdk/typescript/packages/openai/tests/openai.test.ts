@@ -89,39 +89,6 @@ describe("OpenAI instrumentation", () => {
     });
   });
 
-  it("captures camelCase chat tool calls", async () => {
-    const events: EventData[] = [];
-    const client = adrian({
-      chat: {
-        completions: {
-          create: async (_body: Record<string, unknown>) => ({
-            choices: [{
-              message: {
-                content: null,
-                toolCalls: [{
-                  id: "call-3",
-                  name: "search",
-                  args: { query: "camel" },
-                }],
-              },
-            }],
-          }),
-        },
-      },
-    });
-
-    await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
-      events.push(data);
-    } });
-    await client.chat.completions.create({ model: "gpt-4o-mini", messages: [{ role: "user", content: "use search" }] });
-
-    expect(events[0]).toMatchObject({
-      kind: "llm",
-      model: "gpt-4o-mini",
-      toolCalls: [{ id: "call-3", name: "search", args: { query: "camel" } }],
-    });
-  });
-
   it("captures responses API streaming tool calls and text", async () => {
     const events: EventData[] = [];
     async function* stream() {
@@ -151,6 +118,60 @@ describe("OpenAI instrumentation", () => {
       output: "The answer is ready.",
       toolCalls: [{ id: "call-4", name: "lookup", args: { id: 7 } }],
     });
+  });
+
+  it("captures Responses API instructions and array input for stream and non-stream", async () => {
+    const responseBody = {
+      instructions: "You are an autonomous assistant.",
+      input: [
+        { role: "user", content: "Do the work." },
+        { type: "function_call", call_id: "call-1", name: "get_weather", arguments: '{"city":"SF"}' },
+        { type: "function_call_output", call_id: "call-1", output: '{"temp":58}' },
+      ],
+    };
+
+    for (const stream of [false, true]) {
+      const events: EventData[] = [];
+      async function* responseStream() {
+        yield { type: "response.output_text.delta", delta: "Done." };
+      }
+      const client = adrian({
+        responses: {
+          create: async (_body: Record<string, unknown>) => (
+            stream ? responseStream() : { output_text: "Done.", usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }
+          ),
+        },
+      });
+
+      await init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+        events.push(data);
+      } });
+
+      const result = await client.responses.create({
+        model: "gpt-4o-mini",
+        ...responseBody,
+        stream,
+      });
+
+      if (stream) {
+        for await (const _chunk of result as AsyncIterable<unknown>) {
+          // consume stream
+        }
+      }
+
+      expect(events[0]).toMatchObject({
+        kind: "llm",
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "You are an autonomous assistant." },
+          { role: "user", content: "Do the work." },
+          { role: "assistant", content: '[tool_call:get_weather] {"city":"SF"}' },
+          { role: "tool", content: '{"temp":58}' },
+        ],
+      });
+
+      await shutdown();
+    }
   });
 
   it("emits partial stream data when the consumer stops early", async () => {

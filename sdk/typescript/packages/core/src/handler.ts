@@ -213,7 +213,7 @@ function extractLlmEndData(output: unknown): LlmEndData {
   const first = generations[0]?.[0] as Record<string, unknown> | undefined;
   const text = typeof first?.text === "string" ? first.text : "";
   const message = first?.message as Record<string, unknown> | undefined;
-  const rawCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : Array.isArray(message?.toolCalls) ? message.toolCalls : [];
+  const rawCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
   const toolCalls: ToolCallRecord[] = rawCalls.map((call) => {
     const obj = call && typeof call === "object" ? call as Record<string, unknown> : {};
     return { id: String(obj.id ?? ""), name: String(obj.name ?? ""), args: (obj.args && typeof obj.args === "object" ? obj.args : {}) as ToolCallRecord["args"] };

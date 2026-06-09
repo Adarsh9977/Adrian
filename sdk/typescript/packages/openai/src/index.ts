@@ -114,7 +114,10 @@ function instrumentResponses(responses: unknown, options: AdrianOptions): unknow
       return async function adrianOpenAIResponsesCreate(this: unknown, body: Record<string, unknown> = {}, ...rest: unknown[]) {
         const model = String(body.model ?? "openai");
         const metadata = integrationMetadata(options.metadata, "openai.responses");
-        const messages = messagesFromPromptLike({ input: body.input });
+        const messages = messagesFromPromptLike({
+          input: body.input,
+          instructions: body.instructions,
+        });
         if (body.stream === true) {
           const result = await Promise.resolve(value.call(target, body, ...rest));
           if (isAsyncIterable(result)) return captureResponseStream(model, messages, metadata, result);
@@ -137,7 +140,7 @@ function captureChatCompletionStream(model: string, messages: ReturnType<typeof 
     for (const choice of choices) {
       const delta = (choice as Record<string, unknown>).delta as Record<string, unknown> | undefined;
       output += stringifyContent(delta?.content);
-      const calls = Array.isArray(delta?.tool_calls) ? delta.tool_calls : Array.isArray(delta?.toolCalls) ? delta.toolCalls : [];
+      const calls = Array.isArray(delta?.tool_calls) ? delta.tool_calls : [];
       for (const rawCall of calls) {
         const call = rawCall as Record<string, unknown>;
         const index = typeof call.index === "number" ? call.index : toolCallParts.size;
@@ -172,7 +175,7 @@ function extractChatCompletion(result: unknown): LlmEndData {
   const choices = Array.isArray(obj.choices) ? obj.choices : [];
   const first = choices[0] && typeof choices[0] === "object" ? choices[0] as Record<string, unknown> : {};
   const message = first.message && typeof first.message === "object" ? first.message as Record<string, unknown> : {};
-  const toolCalls = normalizeOpenAIToolCalls(message.tool_calls ?? message.toolCalls);
+  const toolCalls = normalizeOpenAIToolCalls(message.tool_calls);
   return emptyLlmEnd(stringifyContent(message.content), toolCalls, normalizeUsage(obj.usage));
 }
 

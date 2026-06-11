@@ -1,22 +1,19 @@
 # Adrian TypeScript SDK
 
-Monorepo for the Adrian TypeScript SDK. Pick the package for your framework — the core SDK is installed automatically.
-
-The core package owns the event pipeline: event pairing, PII redaction, JSONL logging, WebSocket streaming, policy verdicts, and shared capture helpers. Provider packages, such as OpenAI, adapt framework-specific request and response shapes into that core pipeline.
+Monorepo for the Adrian TypeScript SDK. Install a provider package for your framework — the core SDK is pulled in automatically.
 
 ## Packages
 
 | Package | npm name | Install | Import |
 |---|---|---|---|
 | OpenAI | `@secureagentics/adrian-openai` | `npm install @secureagentics/adrian-openai openai` | `import { adrian } from "@secureagentics/adrian-openai"` |
-| Core only | `@secureagentics/adrian` | `npm install @secureagentics/adrian` | `import { adrian } from "@secureagentics/adrian"` |
 
-Provider packages depend on `@secureagentics/adrian` and extend the `adrian` namespace with framework helpers — one install, one import.
+Provider packages extend the `adrian` namespace with framework helpers — one install, one import.
 
 ## Two-step setup
 
 1. **`adrian.init()`** — starts the event pipeline (JSONL, WebSocket, PII redaction).
-2. **`adrian.openai()`** — wraps an OpenAI client for capture (OpenAI package only).
+2. **`adrian.openai()`** — wraps an OpenAI client for capture.
 
 Both come from the same provider package:
 
@@ -32,19 +29,17 @@ The OpenAI provider package exports the Adrian namespace:
 
 | Export | Purpose |
 |---|---|
-| `adrian.init` / `adrian.shutdown` | Core lifecycle |
+| `adrian.init` / `adrian.shutdown` | Lifecycle |
 | `adrian.openai(...)` | Wrap an OpenAI client |
 | `adrian.captureTool(...)` | Capture manual tool execution |
 
-Shared option types (same names in every provider package):
+Shared option types:
 
 | Type | Purpose |
 |---|---|
 | `AdrianOptions` | Optional metadata when wrapping a client or module |
-| `ToolCallLike` | Shape of a tool call passed to `captureTool` |
+| `ToolCallLike` | Shape of a tool call passed to `adrian.captureTool` |
 | `ToolCaptureOptions` | Optional metadata when capturing tool execution |
-
-Named exports (`init`, `shutdown`, etc.) remain available for compatibility.
 
 ## Examples
 
@@ -177,34 +172,9 @@ await adrian.init({
 });
 ```
 
-## Core-only usage
-
-For manual callback wiring without a provider package, use `@secureagentics/adrian` directly:
-
-```ts
-import { adrian } from "@secureagentics/adrian";
-
-await adrian.init({ wsUrl: null });
-const handler = adrian.getHandler();
-await adrian.shutdown();
-```
-
-See the core sections below for manual LLM/tool pairing, custom handlers, and environment variables.
-
-## Core exports
-
-| Export | Description |
-|---|---|
-| `adrian.init(options?)` | Initialise the SDK |
-| `adrian.shutdown()` | Flush handlers and tear down |
-| `adrian.getHandler()` | Access the callback handler for manual wiring |
-| `adrian.getWebSocketClient()` | Access the WebSocket client |
-| `AdrianCallbackHandler` | Event callback handler class |
-| `JSONLHandler` | Local JSONL event sink |
-
 ## Environment
 
-Explicit `init()` options take precedence over environment variables.
+Explicit `adrian.init()` options take precedence over environment variables.
 
 | Variable | Description |
 |---|---|
@@ -218,63 +188,6 @@ Explicit `init()` options take precedence over environment variables.
 ## Policy and BLOCK mode
 
 When connected over WebSocket and the dashboard policy is in **BLOCK** or **HITL** mode, the SDK waits for backend verdicts on tool calls proposed by an LLM turn. In **BLOCK** mode, if no verdict arrives within `blockTimeout` seconds, the SDK **fail-open** and allows execution (matching the Python SDK). Dashboard-configurable failure policy is planned for a later release.
-
-## Manual callback wiring
-
-```ts
-import { adrian } from "@secureagentics/adrian";
-
-await adrian.init();
-const handler = adrian.getHandler();
-```
-
-For custom integrations, pair an LLM start and end with the same `runId`:
-
-```ts
-import { randomUUID } from "node:crypto";
-import { adrian } from "@secureagentics/adrian";
-
-await adrian.init({ wsUrl: null });
-
-const handler = adrian.getHandler();
-const runId = randomUUID();
-
-await handler?.handleChatModelStart(
-  { name: "custom-model" },
-  [[{ role: "user", content: "Hello" }]],
-  runId,
-);
-
-await handler?.handleLLMEnd(
-  {
-    output: "Hi there",
-    toolCalls: [],
-    usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
-  },
-  runId,
-);
-
-await adrian.shutdown();
-```
-
-## Custom event handlers
-
-```ts
-import { adrian, type EventHandler, type PairedEvent } from "@secureagentics/adrian";
-
-const handler: EventHandler = {
-  onPairedEvent(event: PairedEvent) {
-    console.log(event.pairType, event.eventId);
-  },
-  close() {},
-};
-
-await adrian.init({ handlers: [handler] });
-```
-
-## Subpath export
-
-`@secureagentics/adrian/capture` exposes shared LLM capture helpers used internally by provider packages.
 
 ## Development
 
@@ -291,4 +204,4 @@ npm run build -w @secureagentics/adrian
 npm test -w @secureagentics/adrian-openai
 ```
 
-Per-package npm readmes point here: [core](./packages/core) · [openai](./packages/openai)
+Per-package npm readmes point here: [openai](./packages/openai)

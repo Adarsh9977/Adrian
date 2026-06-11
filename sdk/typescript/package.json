@@ -1,6 +1,7 @@
 {
   "name": "@secureagentics/adrian-workspace",
   "private": true,
+  "description": "Adrian TypeScript SDK monorepo (npm workspaces).",
   "workspaces": [
     "packages/*"
   ],

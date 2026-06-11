@@ -4,16 +4,18 @@ Monorepo for the Adrian TypeScript SDK. Install a provider package for your fram
 
 ## Packages
 
-| Package | npm name | Install | Import |
-|---|---|---|---|
-| OpenAI | `@secureagentics/adrian-openai` | `npm install @secureagentics/adrian-openai openai` | `import { adrian } from "@secureagentics/adrian-openai"` |
+
+| Package | npm name                        | Install                                            | Import                                                   |
+| ------- | ------------------------------- | -------------------------------------------------- | -------------------------------------------------------- |
+| OpenAI  | `@secureagentics/adrian-openai` | `npm install @secureagentics/adrian-openai openai` | `import { adrian } from "@secureagentics/adrian-openai"` |
+
 
 Provider packages extend the `adrian` namespace with framework helpers — one install, one import.
 
 ## Two-step setup
 
-1. **`adrian.init()`** — starts the event pipeline (JSONL, WebSocket, PII redaction).
-2. **`adrian.openai()`** — wraps an OpenAI client for capture.
+1. `**adrian.init()**` — starts the event pipeline (JSONL, WebSocket, PII redaction).
+2. `**adrian.openai()**` — wraps an OpenAI client for capture.
 
 Both come from the same provider package:
 
@@ -23,23 +25,41 @@ import { adrian } from "@secureagentics/adrian-openai";
 await adrian.init({ apiKey: process.env.ADRIAN_API_KEY });
 ```
 
+When you omit `wsUrl`, the SDK connects to the Adrian backend at `ws://localhost:8080/ws` (or `ADRIAN_WS_URL` if set). Provide an `apiKey` so the WebSocket login succeeds.
+
+## WebSocket URL
+
+
+| `wsUrl` in `adrian.init()` | Result                                                                                  |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| Omitted                    | Connect to `ADRIAN_WS_URL`, or `ws://localhost:8080/ws` if unset                        |
+| Explicit URL string        | Connect to that URL                                                                     |
+| `null`                     | Do not connect — JSONL / `onEvent` only (see [Local logging only](#local-logging-only)) |
+
+
+Explicit init options take precedence over environment variables.
+
 ## Unified API
 
 The OpenAI provider package exports the Adrian namespace:
 
-| Export | Purpose |
-|---|---|
-| `adrian.init` / `adrian.shutdown` | Lifecycle |
-| `adrian.openai(...)` | Wrap an OpenAI client |
-| `adrian.captureTool(...)` | Capture manual tool execution |
+
+| Export                            | Purpose                       |
+| --------------------------------- | ----------------------------- |
+| `adrian.init` / `adrian.shutdown` | Lifecycle                     |
+| `adrian.openai(...)`              | Wrap an OpenAI client         |
+| `adrian.captureTool(...)`         | Capture manual tool execution |
+
 
 Shared option types:
 
-| Type | Purpose |
-|---|---|
-| `AdrianOptions` | Optional metadata when wrapping a client or module |
-| `ToolCallLike` | Shape of a tool call passed to `adrian.captureTool` |
-| `ToolCaptureOptions` | Optional metadata when capturing tool execution |
+
+| Type                 | Purpose                                             |
+| -------------------- | --------------------------------------------------- |
+| `AdrianOptions`      | Optional metadata when wrapping a client or module  |
+| `ToolCallLike`       | Shape of a tool call passed to `adrian.captureTool` |
+| `ToolCaptureOptions` | Optional metadata when capturing tool execution     |
+
 
 ## Examples
 
@@ -160,7 +180,7 @@ for await (const chunk of stream) {
 
 ### Local logging only
 
-Use `wsUrl: null` when you want JSONL logging without connecting to the Adrian backend (even when `ADRIAN_WS_URL` is set):
+Use `wsUrl: null` to skip the WebSocket connection and log events locally. This overrides `ADRIAN_WS_URL` even when that env var is set:
 
 ```ts
 await adrian.init({
@@ -174,16 +194,16 @@ await adrian.init({
 
 ## Environment
 
-Explicit `adrian.init()` options take precedence over environment variables.
 
-| Variable | Description |
-|---|---|
-| `ADRIAN_API_KEY` | API key used for WebSocket authentication |
-| `ADRIAN_LOG_FILE` | Local JSONL log path (default: `events.jsonl`) |
-| `ADRIAN_WS_URL` | WebSocket endpoint (default: `ws://localhost:8080/ws`) |
-| `ADRIAN_SESSION_ID` | Session identifier for grouping events |
-| `ADRIAN_BLOCK_TIMEOUT` | Seconds to wait for a BLOCK-mode verdict before fail-open (default: `30`) |
-| `ADRIAN_REPLAY_BUFFER_FRAMES` | WebSocket replay buffer size (default: `1000`) |
+| Variable                      | Description                                                                                         |
+| ----------------------------- | --------------------------------------------------------------------------------------------------- |
+| `ADRIAN_API_KEY`              | API key used for WebSocket authentication                                                           |
+| `ADRIAN_LOG_FILE`             | Local JSONL log path (default: `events.jsonl`)                                                      |
+| `ADRIAN_WS_URL`               | WebSocket endpoint when `wsUrl` is omitted from `adrian.init()` (default: `ws://localhost:8080/ws`) |
+| `ADRIAN_SESSION_ID`           | Session identifier for grouping events                                                              |
+| `ADRIAN_BLOCK_TIMEOUT`        | Seconds to wait for a BLOCK-mode verdict before fail-open (default: `30`)                           |
+| `ADRIAN_REPLAY_BUFFER_FRAMES` | WebSocket replay buffer size (default: `1000`)                                                      |
+
 
 ## Policy and BLOCK mode
 

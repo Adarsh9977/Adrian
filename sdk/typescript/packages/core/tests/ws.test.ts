@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PairedEvent } from "../src/format/types.js";
 import { Mode, type Verdict } from "../src/proto/schema.js";
-import { WebSocketClient } from "../src/ws.js";
+import { reconnectDelayMsAfterClose, WebSocketClient } from "../src/ws.js";
 
 function client(): WebSocketClient {
   return new WebSocketClient({ url: "ws://localhost:0", sessionId: "sess", apiKey: "key", replayBufferFrames: 10 });
@@ -63,8 +63,20 @@ describe("WebSocketClient verdict waiting", () => {
   });
 
   it("schedules a 60s reconnect delay after quota-exhausted close", () => {
+    expect(reconnectDelayMsAfterClose(4003)).toBe(60_000);
+    expect(reconnectDelayMsAfterClose(1000)).toBeNull();
+    expect(reconnectDelayMsAfterClose(undefined)).toBeNull();
+  });
+
+  it("applies quota reconnect delay via scheduleReconnectAfterClose", () => {
     const ws = client();
-    expect(ws.reconnectDelayAfterClose(4003, 1000)).toBe(60_000);
-    expect(ws.reconnectDelayAfterClose(null, 1000)).toBe(1000);
+    ws.scheduleReconnectAfterClose(4003);
+    expect((ws as unknown as { nextReconnectDelay: number | null }).nextReconnectDelay).toBe(60_000);
+  });
+
+  it("does not set reconnect delay for ordinary close codes", () => {
+    const ws = client();
+    ws.scheduleReconnectAfterClose(1006);
+    expect((ws as unknown as { nextReconnectDelay: number | null }).nextReconnectDelay).toBeNull();
   });
 });

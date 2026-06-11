@@ -59,8 +59,10 @@ export async function captureTool<T>(
   const metadata = integrationMetadata(options.metadata, "openai.tool_call");
 
   // Gate before running the handler so BLOCK/HITL policy can halt execution.
+  // Uses the tool_call_id from the LLM turn so the backend verdict correlates.
   await assertToolCallsAllowed(toolCallId ? [toolCallId] : [], getWebSocketClient(), currentConfig()?.blockTimeout ?? 30);
 
+  // runWithInvocationId scopes tool start/end to the same invocation tree as LLM events.
   return runWithInvocationId(randomUUID(), async () => {
     await handler.handleToolStart({ name: toolName }, input, runId, options.parentRunId, { metadata, tool_call_id: toolCallId });
     try {
@@ -74,7 +76,7 @@ export async function captureTool<T>(
   });
 }
 
-/** Wrap an OpenAI client so Adrian captures LLM calls on `chat` and `responses`. */
+/** Public entry: `adrian.openai(new OpenAI())`. */
 function wrapOpenAI<T extends object>(client: T, options: AdrianOptions = {}): T {
   // Top-level proxy routes into chat.completions and responses.create.
   return new Proxy(client, {
@@ -86,6 +88,7 @@ function wrapOpenAI<T extends object>(client: T, options: AdrianOptions = {}): T
   });
 }
 
+/** Proxy `client.chat` → `completions.create`. */
 function instrumentChat(chat: unknown, options: AdrianOptions): unknown {
   if (!chat || typeof chat !== "object") return chat;
   return new Proxy(chat as Record<PropertyKey, unknown>, {
@@ -96,6 +99,11 @@ function instrumentChat(chat: unknown, options: AdrianOptions): unknown {
   });
 }
 
+/**
+ * Intercept `chat.completions.create`.
+ * Non-stream: one paired LLM event after the response resolves.
+ * Stream: wrap the async iterable; emit one event when the stream ends.
+ */
 function instrumentChatCompletions(completions: unknown, options: AdrianOptions): unknown {
   if (!completions || typeof completions !== "object") return completions;
   return new Proxy(completions as Record<PropertyKey, unknown>, {
@@ -111,12 +119,17 @@ function instrumentChatCompletions(completions: unknown, options: AdrianOptions)
           if (isAsyncIterable(result)) return captureChatCompletionStream(model, messages, metadata, result);
           return result;
         }
+        // Non-stream path: core capture helper pairs handleChatModelStart/End around the call.
         return captureLlmCall(getHandler, { model, messages, metadata }, () => Promise.resolve(value.call(target, body, ...rest)), extractChatCompletion, gateLlmEndData);
       };
     },
   });
 }
 
+/**
+ * Intercept `responses.create`.
+ * Maps `input` / `instructions` into Adrian message shape via messagesFromPromptLike.
+ */
 function instrumentResponses(responses: unknown, options: AdrianOptions): unknown {
   if (!responses || typeof responses !== "object") return responses;
   return new Proxy(responses as Record<PropertyKey, unknown>, {
@@ -141,7 +154,7 @@ function instrumentResponses(responses: unknown, options: AdrianOptions): unknow
   });
 }
 
-/** Aggregate chat completion stream chunks into one paired LLM event at the end. */
+/** Aggregate Chat Completions stream chunks into one paired LLM event at the end. */
 function captureChatCompletionStream(model: string, messages: ReturnType<typeof normalizeMessages>, metadata: CallbackMetadata | null, stream: AsyncIterable<unknown>): AsyncIterable<unknown> {
   let output = "";
   let usage: LlmEndData["usage"] = null;
@@ -149,6 +162,7 @@ function captureChatCompletionStream(model: string, messages: ReturnType<typeof 
   const toolCallParts = new Map<number, { id: string; name: string; args: string }>();
   return captureLlmAsyncIterable(getHandler, { model, messages, metadata }, stream, (chunk) => {
     const obj = chunk && typeof chunk === "object" ? chunk as Record<string, unknown> : {};
+    // Usage arrives on the final chunk when stream_options.include_usage is set.
     usage = normalizeUsage(obj.usage) ?? usage;
     const choices = Array.isArray(obj.choices) ? obj.choices : [];
     for (const choice of choices) {
@@ -170,6 +184,7 @@ function captureChatCompletionStream(model: string, messages: ReturnType<typeof 
   }, () => emptyLlmEnd(output, [...toolCallParts.values()].map((call) => ({ id: call.id, name: call.name, args: parseToolArgs(call.args) })), usage), gateLlmEndData);
 }
 
+/** Aggregate Responses API stream events into one paired LLM event at the end. */
 function captureResponseStream(model: string, messages: ReturnType<typeof normalizeMessages>, metadata: CallbackMetadata | null, stream: AsyncIterable<unknown>): AsyncIterable<unknown> {
   let output = "";
   let usage: LlmEndData["usage"] = null;
@@ -183,6 +198,7 @@ function captureResponseStream(model: string, messages: ReturnType<typeof normal
   }, () => emptyLlmEnd(output, [...toolCallParts.values()].map((call) => ({ id: call.id, name: call.name, args: parseToolArgs(call.args) })), usage), gateLlmEndData);
 }
 
+/** Map a completed Chat Completions response object into Adrian LLM end data. */
 function extractChatCompletion(result: unknown): LlmEndData {
   if (isAsyncIterable(result)) return emptyLlmEnd();
   const obj = result && typeof result === "object" ? result as Record<string, unknown> : {};
@@ -193,12 +209,14 @@ function extractChatCompletion(result: unknown): LlmEndData {
   return emptyLlmEnd(stringifyContent(message.content), toolCalls, normalizeUsage(obj.usage));
 }
 
+/** Map a completed Responses API object into Adrian LLM end data. */
 function extractResponse(result: unknown): LlmEndData {
   if (isAsyncIterable(result)) return emptyLlmEnd();
   const obj = result && typeof result === "object" ? result as Record<string, unknown> : {};
   return emptyLlmEnd(typeof obj.output_text === "string" ? obj.output_text : stringifyContent(obj.output), normalizeResponseToolCalls(obj.output), normalizeUsage(obj.usage));
 }
 
+/** Normalise Chat Completions `message.tool_calls` into Adrian tool call records. */
 function normalizeOpenAIToolCalls(raw: unknown): ToolCallRecord[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((call) => {
@@ -208,6 +226,7 @@ function normalizeOpenAIToolCalls(raw: unknown): ToolCallRecord[] {
   });
 }
 
+/** Walk Responses `output` tree for function_call / tool_call items. */
 function normalizeResponseToolCalls(raw: unknown): ToolCallRecord[] {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((item) => {
@@ -220,7 +239,10 @@ function normalizeResponseToolCalls(raw: unknown): ToolCallRecord[] {
   });
 }
 
-/** Responses streaming emits tool metadata and argument deltas in separate events. */
+/**
+ * Responses streaming emits tool metadata and argument deltas in separate events.
+ * Handles `response.output_item.added` items and `response.function_call_arguments.delta`.
+ */
 function collectResponseStreamToolCall(obj: Record<string, unknown>, toolCallParts: Map<string, { id: string; name: string; args: string }>): void {
   const item = obj.item && typeof obj.item === "object" ? obj.item as Record<string, unknown> : null;
   if (item && (item.type === "function_call" || item.type === "tool_call")) {
@@ -239,6 +261,7 @@ function collectResponseStreamToolCall(obj: Record<string, unknown>, toolCallPar
   toolCallParts.set(key, { ...current, args: current.args + obj.delta });
 }
 
+/** Tag events with provider integration metadata for downstream filtering. */
 function integrationMetadata(metadata: CallbackMetadata | null | undefined, operation: string): CallbackMetadata {
   return { ...(metadata ?? {}), adrianIntegration: "openai", operation };
 }
@@ -247,6 +270,10 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
   return Boolean(value && typeof value === "object" && Symbol.asyncIterator in value);
 }
 
+/**
+ * Unified Adrian namespace for OpenAI apps.
+ * Prefer `import { adrian } from "@secureagentics/adrian-openai"` over named exports.
+ */
 export const adrian = {
   init,
   shutdown,

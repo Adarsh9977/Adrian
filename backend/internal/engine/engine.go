@@ -19,6 +19,12 @@ type Verdict struct {
 	Classification string
 	Reasoning      string
 	LatencyMS      int64
+	// Attack-chain escalation fields. Populated when the behaviour
+	// graph rule engine correlates benign per-event verdicts into a
+	// higher-risk composite MAD code.
+	EscalatedFrom string
+	ChainRuleID   string
+	ChainRuleName string
 }
 
 // Classifier classifies a paired event. Implementations honour ctx

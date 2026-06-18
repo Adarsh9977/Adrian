@@ -44,9 +44,10 @@ type HistoryItem struct {
 	MADCode string
 }
 
-// SlidingWindow holds per-key event history plus a per-key mutex
-// (the "agent lock") that serialises read-classify-publish-push
-// across same-key events. Different keys don't contend.
+// SlidingWindow holds per-key event history, a behaviour graph for
+// attack-chain detection, and a per-key mutex (the "agent lock")
+// that serialises read-classify-publish-push across same-key events.
+// Different keys don't contend.
 //
 // Single-process, in-memory only. Restart loses warm state, the
 // classifier just starts cold for known keys, no correctness impact.
@@ -55,11 +56,13 @@ type SlidingWindow struct {
 	entries map[Key]*windowEntry
 	size    int
 	ttl     time.Duration
+	rules   *RuleEngine
 }
 
 type windowEntry struct {
 	mu         sync.Mutex // the per-key agent lock
 	items      []HistoryItem
+	graph      BehaviorGraph
 	lastAccess time.Time
 	guid       string // lazily generated; per-conversation untrusted-tag id
 }
@@ -86,6 +89,7 @@ func NewSlidingWindow(opts WindowOpts) *SlidingWindow {
 		entries: make(map[Key]*windowEntry),
 		size:    size,
 		ttl:     ttl,
+		rules:   NewRuleEngine(),
 	}
 }
 
@@ -158,6 +162,36 @@ func (h *Handle) Guid() string {
 // the across-call stability is forfeit.
 func freshGuid() string {
 	return uuid.NewString()
+}
+
+// Graph returns a snapshot of the behaviour graph for rule evaluation.
+func (h *Handle) Graph() BehaviorGraph {
+	return h.entry.graph.Snapshot()
+}
+
+// RecordNode attaches security tags and appends an AttackNode to the
+// behaviour graph. Caller must hold the Handle lock via Acquire.
+func (h *Handle) RecordNode(k Key, eventID, madCode string, tags []SecurityTag) {
+	n := AttackNode{
+		EventID:      eventID,
+		SessionID:    k.SessionID,
+		InvocationID: k.InvocationID,
+		AgentID:      k.AgentID,
+		MADCode:      madCode,
+		Tags:         tags,
+		Timestamp:    time.Now(),
+	}
+	h.entry.graph.AddNode(n)
+	h.entry.graph.Trim(h.w.size)
+}
+
+// EvaluateChain runs the rule engine against the current graph and
+// the per-event MAD code. Returns nil when no escalation applies.
+func (h *Handle) EvaluateChain(currentMAD string) *ChainMatch {
+	if h.w.rules == nil {
+		return nil
+	}
+	return h.w.rules.Evaluate(h.entry.graph, currentMAD)
 }
 
 // Push appends one item, trims to the configured size, and refreshes

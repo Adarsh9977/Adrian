@@ -443,3 +443,53 @@ func TestHTTPClientNoWindowSkipsHistory(t *testing.T) {
 		t.Errorf("no-window path messages = %d, want 4 (no history accumulation)", capturedLen)
 	}
 }
+
+// TestHTTPClientAttackChainEscalation verifies that individually
+// benign (M0) events are correlated into a higher-risk verdict when
+// the behaviour graph matches an attack sequence.
+func TestHTTPClientAttackChainEscalation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"M0"}}]}`))
+	}))
+	defer srv.Close()
+
+	window := NewSlidingWindow(WindowOpts{Size: 16, TTL: time.Hour})
+	c := NewHTTPClient(srv.URL, "test-key", "test-model", window, nil)
+
+	mkTool := func(eventID, toolName string) *pb.PairedEvent {
+		return &pb.PairedEvent{
+			EventId:      eventID,
+			SessionId:    "sess-chain",
+			InvocationId: "inv-chain",
+			PairType:     pb.PairType_PAIR_TYPE_TOOL,
+			Agent:        &pb.AgentContext{AgentId: "agent-chain"},
+			Data:         &pb.PairedEvent_Tool{Tool: &pb.ToolPairData{ToolName: toolName}},
+		}
+	}
+
+	v1, err := c.Classify(context.Background(), mkTool("ev-1", "get_secret"), "")
+	if err != nil {
+		t.Fatalf("first classify: %v", err)
+	}
+	if v1.MADCode != "M0" {
+		t.Fatalf("first event should stay M0, got %q", v1.MADCode)
+	}
+
+	v2, err := c.Classify(context.Background(), mkTool("ev-2", "http_post"), "")
+	if err != nil {
+		t.Fatalf("second classify: %v", err)
+	}
+	if v2.MADCode != "M3.c" {
+		t.Errorf("second event should escalate to M3.c via attack chain, got %q (reasoning: %s)",
+			v2.MADCode, v2.Reasoning)
+	}
+	if v2.EscalatedFrom != "M0" {
+		t.Errorf("EscalatedFrom = %q, want M0", v2.EscalatedFrom)
+	}
+	if v2.ChainRuleID != "exfil-secret-http" {
+		t.Errorf("ChainRuleID = %q, want exfil-secret-http", v2.ChainRuleID)
+	}
+	if v2.Classification != "block" {
+		t.Errorf("Classification = %q, want block for M3.c", v2.Classification)
+	}
+}

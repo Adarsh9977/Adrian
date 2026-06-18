@@ -123,6 +123,20 @@ func (c *HTTPClient) Classify(ctx context.Context, ev *pb.PairedEvent, agentProf
 		// classification that never happened.
 		return nil, err
 	}
+
+	tags := extractSecurityTags(ev)
+	h.RecordNode(key, ev.EventId, verdict.MADCode, tags)
+	if match := h.EvaluateChain(verdict.MADCode); match != nil {
+		applyChainEscalation(verdict, match)
+		slog.InfoContext(ctx, "engine.attack_chain_escalation",
+			"event_id", ev.EventId,
+			"rule_id", match.RuleID,
+			"escalated_from", verdict.EscalatedFrom,
+			"mad_code", verdict.MADCode,
+			"tags", tags,
+		)
+	}
+
 	h.Push(ev, verdict.MADCode)
 	return verdict, nil
 }

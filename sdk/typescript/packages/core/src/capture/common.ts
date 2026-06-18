@@ -61,36 +61,86 @@ export function captureLlmAsyncIterable<T>(
 
   const runId = randomUUID();
   const invocationId = randomUUID();
+  const activeHandler = handler;
 
-  async function* wrapped(): AsyncGenerator<T> {
-    await handler?.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
-    yield* runWithInvocationId(invocationId, async function* () {
-      let emitted = false;
-      let failed = false;
-      try {
-        for await (const chunk of iterable) {
-          aggregate(chunk);
-          yield chunk;
-        }
-        emitted = true;
-        const endData = await extractOutput();
-        await handler?.handleLLMEnd(endData, runId);
-        await afterPairedEmit?.(endData);
-      } catch (error) {
-        failed = true;
-        await handler?.handleLLMError(error, runId);
-        throw error;
-      } finally {
-        if (!emitted && !failed) {
+  const createIterator = (): AsyncIterator<T> => {
+    async function* gen(): AsyncGenerator<T> {
+      await activeHandler.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
+      yield* runWithInvocationId(invocationId, async function* () {
+        let emitted = false;
+        let failed = false;
+        try {
+          for await (const chunk of iterable) {
+            aggregate(chunk);
+            yield chunk;
+          }
+          emitted = true;
           const endData = await extractOutput();
-          await handler?.handleLLMEnd(endData, runId);
+          await activeHandler.handleLLMEnd(endData, runId);
           await afterPairedEmit?.(endData);
+        } catch (error) {
+          failed = true;
+          await activeHandler.handleLLMError(error, runId);
+          throw error;
+        } finally {
+          if (!emitted && !failed) {
+            const endData = await extractOutput();
+            await activeHandler.handleLLMEnd(endData, runId);
+            await afterPairedEmit?.(endData);
+          }
         }
-      }
-    });
-  }
+      });
+    }
+    return gen();
+  };
 
-  return wrapped();
+  return preserveStreamSurface(iterable, createIterator);
+}
+
+/** Keep provider stream helpers (tee, toReadableStream, controller) while intercepting iteration. */
+function preserveStreamSurface<T>(
+  source: AsyncIterable<T>,
+  createIterator: () => AsyncIterator<T>,
+): AsyncIterable<T> {
+  const iterable: AsyncIterable<T> = { [Symbol.asyncIterator]: createIterator };
+  if (!source || typeof source !== "object") return iterable;
+
+  const stream = source as Record<PropertyKey, unknown> & AsyncIterable<T>;
+  return new Proxy(iterable, {
+    get(taget, prop, receiver) {
+      if (prop === Symbol.asyncIterator) return createIterator;
+      if (prop === "tee") {
+        return () => teeCapturingStream(createIterator).map((branch) => preserveStreamSurface(stream, branch));
+      }
+      const value = Reflect.get(stream, prop, stream);
+      if (typeof value === "function") return value.bind(receiver);
+      return value;
+    },
+  });
+}
+
+/** Split one capturing iterator into two branches without restarting capture. */
+function teeCapturingStream<T>(
+  createIterator: () => AsyncIterator<T>,
+): [() => AsyncIterator<T>, () => AsyncIterator<T>] {
+  const left: Array<Promise<IteratorResult<T>>> = [];
+  const right: Array<Promise<IteratorResult<T>>> = [];
+  const iterator = createIterator();
+
+  const branchIterator = (queue: Array<Promise<IteratorResult<T>>>) => (): AsyncIterator<T> => ({
+    next: () => {
+      if (queue.length === 0) {
+        const result = iterator.next();
+        left.push(result);
+        right.push(result);
+      }
+      return queue.shift()!;
+    },
+    return: (value) => iterator.return?.(value) ?? Promise.resolve({ done: true as const, value: undefined }),
+    throw: (error) => iterator.throw?.(error) ?? Promise.reject(error),
+  });
+
+  return [branchIterator(left), branchIterator(right)];
 }
 
 export function normalizeMessages(input: unknown): ChatMessage[] {

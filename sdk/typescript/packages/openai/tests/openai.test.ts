@@ -3,6 +3,61 @@ import * as adrianCore from "@secureagentics/adrian";
 import { AdrianPolicyBlockedError, Mode, type EventData, type Verdict, type WebSocketClient } from "@secureagentics/adrian";
 import { adrian } from "../src/index.js";
 
+function mockOpenAIStream<T>(chunks: T[]) {
+  const controller = new AbortController();
+  async function* sourceIterator() {
+    for (const chunk of chunks) yield chunk;
+  }
+
+  const stream = {
+    controller,
+    async *[Symbol.asyncIterator]() {
+      yield* sourceIterator();
+    },
+    tee() {
+      const left: Array<Promise<IteratorResult<T>>> = [];
+      const right: Array<Promise<IteratorResult<T>>> = [];
+      const iterator = sourceIterator();
+      const branch = (queue: Array<Promise<IteratorResult<T>>>) => ({
+        next: () => {
+          if (queue.length === 0) {
+            const result = iterator.next();
+            left.push(result);
+            right.push(result);
+          }
+          return queue.shift()!;
+        },
+      });
+      const branchStream = (iter: () => AsyncIterator<T>) => ({
+        controller,
+        [Symbol.asyncIterator]: iter,
+        tee: stream.tee,
+        toReadableStream: stream.toReadableStream,
+      });
+      return [branchStream(() => branch(left)), branchStream(() => branch(right))] as [typeof stream, typeof stream];
+    },
+    toReadableStream() {
+      let iter: AsyncIterator<T> | undefined;
+      return new ReadableStream<Uint8Array>({
+        pull: async (ctrl) => {
+          iter ??= (this as AsyncIterable<T>)[Symbol.asyncIterator]();
+          const { value, done } = await iter.next();
+          if (done) ctrl.close();
+          else ctrl.enqueue(new TextEncoder().encode(`${JSON.stringify(value)}\n`));
+        },
+      });
+    },
+  };
+
+  return stream;
+}
+
+interface StreamLike<T> extends AsyncIterable<T> {
+  controller: AbortController;
+  tee(): [StreamLike<T>, StreamLike<T>];
+  toReadableStream(): ReadableStream<Uint8Array>;
+}
+
 function mockWs(halt: boolean): WebSocketClient {
   return {
     waitForPolicyReady: async () => true,
@@ -172,6 +227,91 @@ describe("OpenAI instrumentation", () => {
 
       await adrian.shutdown();
     }
+  });
+
+  it("preserves OpenAI stream helper methods when Adrian is enabled", async () => {
+    const events: EventData[] = [];
+    const source = mockOpenAIStream([
+      { choices: [{ delta: { content: "hello" } }] },
+    ]);
+    const client = adrian.openai({
+      chat: {
+        completions: {
+          create: async (_body: Record<string, unknown>) => source,
+        },
+      },
+    });
+
+    await adrian.init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+      events.push(data);
+    } });
+
+    const result = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: "stream" }],
+      stream: true,
+    }) as StreamLike<unknown>;
+
+    expect(result.controller).toBe(source.controller);
+    expect(typeof result.tee).toBe("function");
+    expect(typeof result.toReadableStream).toBe("function");
+
+    const reader = result.toReadableStream().getReader();
+    const { value } = await reader.read();
+    expect(new TextDecoder().decode(value)).toBe('{"choices":[{"delta":{"content":"hello"}}]}\n');
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+    }
+
+    expect(events[0]).toMatchObject({
+      kind: "llm",
+      model: "gpt-4o-mini",
+      output: "hello",
+    });
+  });
+
+  it("preserves tee() while capturing a single paired LLM event", async () => {
+    const events: EventData[] = [];
+    const source = mockOpenAIStream([
+      { choices: [{ delta: { content: "hello" } }] },
+      { choices: [{ delta: { content: " world" } }] },
+    ]);
+    const client = adrian.openai({
+      chat: {
+        completions: {
+          create: async (_body: Record<string, unknown>) => source,
+        },
+      },
+    });
+
+    await adrian.init({ handlers: [], sessionId: "sess", wsUrl: null, onEvent: (_type, data) => {
+      events.push(data);
+    } });
+
+    const result = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: "stream" }],
+      stream: true,
+    }) as StreamLike<unknown>;
+
+    const [left, right] = result.tee();
+    expect(left.controller).toBe(source.controller);
+    expect(typeof left.toReadableStream).toBe("function");
+
+    for await (const _chunk of left) {
+      // consume one tee branch
+    }
+    for await (const _chunk of right) {
+      // consume the other branch
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "llm",
+      model: "gpt-4o-mini",
+      output: "hello world",
+    });
   });
 
   it("emits partial stream data when the consumer stops early", async () => {

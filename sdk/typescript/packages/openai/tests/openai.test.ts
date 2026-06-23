@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as adrianCore from "@secureagentics/adrian";
-import { BLOCKED_TOOL_MESSAGE, Mode, type EventData, type Verdict, type WebSocketClient } from "@secureagentics/adrian";
+import { BLOCKED_TOOL_MESSAGE, Mode, type EventData, type PairedEvent, type Verdict, type WebSocketClient } from "@secureagentics/adrian";
 import { adrian } from "../src/index.js";
 
 function mockOpenAIStream<T>(chunks: T[]) {
@@ -410,6 +410,94 @@ describe("OpenAI instrumentation", () => {
         error: { name: "Error", message: "weather API unavailable" },
       },
     });
+  });
+
+  it("emits no_invocation when OpenAI capture runs without an outer invocation", async () => {
+    const pairedEvents: PairedEvent[] = [];
+    const client = adrian.openai({
+      chat: {
+        completions: {
+          create: async (_body: Record<string, unknown>) => ({
+            choices: [{
+              message: {
+                content: "",
+                tool_calls: [{
+                  id: "call-weather",
+                  function: { name: "get_weather", arguments: "{\"city\":\"San Francisco\"}" },
+                }],
+              },
+            }],
+          }),
+        },
+      },
+    });
+
+    await adrian.init({
+      handlers: [{
+        onPairedEvent(event) {
+          pairedEvents.push(event);
+        },
+        close() {},
+      }],
+      sessionId: "sess",
+      wsUrl: null,
+    });
+
+    const response = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: "What's the weather?" }],
+    });
+
+    await adrian.captureTool(response.choices[0].message.tool_calls[0], async () => ({ temperatureF: 58 }));
+
+    expect(pairedEvents).toHaveLength(2);
+    expect(pairedEvents.map((event) => event.invocationId)).toEqual(["no_invocation", "no_invocation"]);
+    expect(pairedEvents.map((event) => event.pairType)).toEqual(["llm", "tool"]);
+  });
+
+  it("reuses the active invocation for LLM and tool captures", async () => {
+    const pairedEvents: PairedEvent[] = [];
+    const client = adrian.openai({
+      chat: {
+        completions: {
+          create: async (_body: Record<string, unknown>) => ({
+            choices: [{
+              message: {
+                content: "",
+                tool_calls: [{
+                  id: "call-weather",
+                  function: { name: "get_weather", arguments: "{\"city\":\"San Francisco\"}" },
+                }],
+              },
+            }],
+          }),
+        },
+      },
+    });
+
+    await adrian.init({
+      handlers: [{
+        onPairedEvent(event) {
+          pairedEvents.push(event);
+        },
+        close() {},
+      }],
+      sessionId: "sess",
+      wsUrl: null,
+    });
+
+    await adrianCore.runWithInvocationId("inv-shared", async () => {
+      const response = await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: "What's the weather?" }],
+      });
+
+      await adrian.captureTool(response.choices[0].message.tool_calls[0], async () => ({ temperatureF: 58 }));
+    });
+
+    expect(pairedEvents).toHaveLength(2);
+    expect(pairedEvents.map((event) => event.invocationId)).toEqual(["inv-shared", "inv-shared"]);
+    expect(pairedEvents.map((event) => event.pairType)).toEqual(["llm", "tool"]);
   });
 
   it("captures OpenAI request errors as LLM events", async () => {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AdrianCallbackHandler } from "../handler.js";
-import { runWithInvocationId } from "../context.js";
+import { getInvocationId, runWithInvocationId } from "../context.js";
 import type { CallbackMetadata, ChatMessage, LlmEndData, TokenUsage, ToolArgs, ToolCallRecord } from "../types.js";
 
 /** Hook after LLM end; policy gating happens at tool execution time (see captureTool). */
@@ -24,7 +24,8 @@ export async function captureLlmCall<T>(
   if (!handler) return execute();
 
   const runId = randomUUID();
-  return runWithInvocationId(randomUUID(), async () => {
+  const invocationId = getInvocationId();
+  const run = async () => {
     await handler.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
     try {
       const result = await execute();
@@ -36,7 +37,8 @@ export async function captureLlmCall<T>(
       await handler.handleLLMError(error, runId);
       throw error;
     }
-  });
+  };
+  return invocationId === null ? run() : runWithInvocationId(invocationId, run);
 }
 
 /** Wrap an LLM call that may fail before returning (e.g. streaming create). Records start+error, then re-throws. */
@@ -51,10 +53,12 @@ export async function captureLlmExecute<T>(
     const handler = getHandler();
     if (handler) {
       const runId = randomUUID();
-      await runWithInvocationId(randomUUID(), async () => {
+      const invocationId = getInvocationId();
+      const run = async () => {
         await handler.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
         await handler.handleLLMError(error, runId);
-      });
+      };
+      await (invocationId === null ? run() : runWithInvocationId(invocationId, run));
     }
     throw error;
   }
@@ -72,13 +76,14 @@ export function captureLlmAsyncIterable<T>(
   if (!handler) return iterable;
 
   const runId = randomUUID();
-  const invocationId = randomUUID();
+  const invocationId = getInvocationId();
   const activeHandler = handler;
 
   const createIterator = (): AsyncIterator<T> => {
     async function* gen(): AsyncGenerator<T> {
       await activeHandler.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
-      yield* runWithInvocationId(invocationId, async function* () {
+
+      const streamBody = async function* (): AsyncGenerator<T> {
         let emitted = false;
         let failed = false;
         try {
@@ -101,7 +106,13 @@ export function captureLlmAsyncIterable<T>(
             await afterPairedEmit?.(endData);
           }
         }
-      });
+      };
+
+      if (invocationId === null) {
+        yield* streamBody();
+      } else {
+        yield* runWithInvocationId(invocationId, streamBody);
+      }
     }
     return gen();
   };

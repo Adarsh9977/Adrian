@@ -4,6 +4,7 @@ import {
   currentConfig,
   gateToolCallIds,
   getHandler,
+  getInvocationId,
   getWebSocketClient,
   init,
   runWithInvocationId,
@@ -62,8 +63,9 @@ export async function captureTool<T>(
 
   const gate = await gateToolCallIds(toolCallId ? [toolCallId] : [], getWebSocketClient(), currentConfig()?.blockTimeout ?? 30);
 
-  // runWithInvocationId scopes tool start/end to the same invocation tree as LLM events.
-  return runWithInvocationId(randomUUID(), async () => {
+  // Match Python: only inherit an invocation that was established upstream.
+  const invocationId = getInvocationId();
+  const run = async () => {
     await handler.handleToolStart({ name: toolName }, input, runId, options.parentRunId, { metadata, tool_call_id: toolCallId });
     if (gate.action === "block") {
       await handler.handleToolEnd(BLOCKED_TOOL_MESSAGE, runId);
@@ -77,7 +79,8 @@ export async function captureTool<T>(
       await handler.handleToolError(error, runId);
       throw error;
     }
-  });
+  };
+  return invocationId === null ? run() : runWithInvocationId(invocationId, run);
 }
 
 /** Public entry: `adrian.openai(new OpenAI())`. */

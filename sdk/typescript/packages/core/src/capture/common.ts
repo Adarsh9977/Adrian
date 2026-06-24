@@ -1,10 +1,19 @@
 import { randomUUID } from "node:crypto";
+import { currentConfig } from "../config.js";
 import type { AdrianCallbackHandler } from "../handler.js";
 import { getInvocationId, runWithInvocationId } from "../context.js";
+import { assertToolCallsAllowed } from "../policy.js";
+import { getWebSocketClient } from "../registry.js";
 import type { CallbackMetadata, ChatMessage, LlmEndData, TokenUsage, ToolArgs, ToolCallRecord } from "../types.js";
 
-/** Hook after LLM end; policy gating happens at tool execution time (see captureTool). */
-export async function gateLlmEndData(_end: LlmEndData): Promise<void> {}
+/** Gate tool calls after the paired LLM event has been emitted (maps tool-call ids on the WS client). */
+export async function gateLlmEndData(end: LlmEndData): Promise<void> {
+  await assertToolCallsAllowed(
+    end.toolCalls.map((call) => call.id),
+    getWebSocketClient(),
+    currentConfig()?.blockTimeout ?? 30,
+  );
+}
 
 export interface LlmCaptureInput {
   model: string;
@@ -130,7 +139,7 @@ function preserveStreamSurface<T>(
 
   const stream = source as Record<PropertyKey, unknown> & AsyncIterable<T>;
   return new Proxy(iterable, {
-    get(taget, prop, receiver) {
+    get(_target, prop, receiver) {
       if (prop === Symbol.asyncIterator) return createIterator;
       if (prop === "tee") {
         return () => teeCapturingStream(createIterator).map((branch) => preserveStreamSurface(stream, branch));

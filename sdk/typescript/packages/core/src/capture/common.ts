@@ -1,18 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { currentConfig } from "../config.js";
 import type { AdrianCallbackHandler } from "../handler.js";
-import { runWithInvocationId } from "../context.js";
-import { assertToolCallsAllowed } from "../policy.js";
-import { getWebSocketClient } from "../registry.js";
+import { getInvocationId, runWithInvocationId } from "../context.js";
 import type { CallbackMetadata, ChatMessage, LlmEndData, TokenUsage, ToolArgs, ToolCallRecord } from "../types.js";
 
-/** Gate tool calls after the paired LLM event has been emitted (maps tool-call ids on the WS client). */
-export async function gateLlmEndData(end: LlmEndData): Promise<void> {
-  await assertToolCallsAllowed(
-    end.toolCalls.map((call) => call.id),
-    getWebSocketClient(),
-    currentConfig()?.blockTimeout ?? 30,
-  );
+/** LLM end tool-call metadata is informational and never blockable. */
+export async function gateLlmEndData(_end: LlmEndData): Promise<void> {
 }
 
 export interface LlmCaptureInput {
@@ -33,7 +25,8 @@ export async function captureLlmCall<T>(
   if (!handler) return execute();
 
   const runId = randomUUID();
-  return runWithInvocationId(randomUUID(), async () => {
+  const invocationId = getInvocationId();
+  const run = async () => {
     await handler.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
     try {
       const result = await execute();
@@ -45,7 +38,31 @@ export async function captureLlmCall<T>(
       await handler.handleLLMError(error, runId);
       throw error;
     }
-  });
+  };
+  return invocationId === null ? run() : runWithInvocationId(invocationId, run);
+}
+
+/** Wrap an LLM call that may fail before returning (e.g. streaming create). Records start+error, then re-throws. */
+export async function captureLlmExecute<T>(
+  getHandler: () => AdrianCallbackHandler | null,
+  input: LlmCaptureInput,
+  execute: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await execute();
+  } catch (error) {
+    const handler = getHandler();
+    if (handler) {
+      const runId = randomUUID();
+      const invocationId = getInvocationId();
+      const run = async () => {
+        await handler.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
+        await handler.handleLLMError(error, runId);
+      };
+      await (invocationId === null ? run() : runWithInvocationId(invocationId, run));
+    }
+    throw error;
+  }
 }
 
 export function captureLlmAsyncIterable<T>(
@@ -60,37 +77,94 @@ export function captureLlmAsyncIterable<T>(
   if (!handler) return iterable;
 
   const runId = randomUUID();
-  const invocationId = randomUUID();
+  const invocationId = getInvocationId();
+  const activeHandler = handler;
 
-  async function* wrapped(): AsyncGenerator<T> {
-    await handler?.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
-    yield* runWithInvocationId(invocationId, async function* () {
-      let emitted = false;
-      let failed = false;
-      try {
-        for await (const chunk of iterable) {
-          aggregate(chunk);
-          yield chunk;
-        }
-        emitted = true;
-        const endData = await extractOutput();
-        await handler?.handleLLMEnd(endData, runId);
-        await afterPairedEmit?.(endData);
-      } catch (error) {
-        failed = true;
-        await handler?.handleLLMError(error, runId);
-        throw error;
-      } finally {
-        if (!emitted && !failed) {
+  const createIterator = (): AsyncIterator<T> => {
+    async function* gen(): AsyncGenerator<T> {
+      await activeHandler.handleChatModelStart({ name: input.model }, [input.messages], runId, input.parentRunId, { metadata: input.metadata });
+
+      const streamBody = async function* (): AsyncGenerator<T> {
+        let emitted = false;
+        let failed = false;
+        try {
+          for await (const chunk of iterable) {
+            aggregate(chunk);
+            yield chunk;
+          }
+          emitted = true;
           const endData = await extractOutput();
-          await handler?.handleLLMEnd(endData, runId);
+          await activeHandler.handleLLMEnd(endData, runId);
           await afterPairedEmit?.(endData);
+        } catch (error) {
+          failed = true;
+          await activeHandler.handleLLMError(error, runId);
+          throw error;
+        } finally {
+          if (!emitted && !failed) {
+            const endData = await extractOutput();
+            await activeHandler.handleLLMEnd(endData, runId);
+            await afterPairedEmit?.(endData);
+          }
         }
-      }
-    });
-  }
+      };
 
-  return wrapped();
+      if (invocationId === null) {
+        yield* streamBody();
+      } else {
+        yield* runWithInvocationId(invocationId, streamBody);
+      }
+    }
+    return gen();
+  };
+
+  return preserveStreamSurface(iterable, createIterator);
+}
+
+/** Keep provider stream helpers (tee, toReadableStream, controller) while intercepting iteration. */
+function preserveStreamSurface<T>(
+  source: AsyncIterable<T>,
+  createIterator: () => AsyncIterator<T>,
+): AsyncIterable<T> {
+  const iterable: AsyncIterable<T> = { [Symbol.asyncIterator]: createIterator };
+  if (!source || typeof source !== "object") return iterable;
+
+  const stream = source as Record<PropertyKey, unknown> & AsyncIterable<T>;
+  return new Proxy(iterable, {
+    get(_target, prop, receiver) {
+      if (prop === Symbol.asyncIterator) return createIterator;
+      if (prop === "tee") {
+        return () => teeCapturingStream(createIterator).map((branch) => preserveStreamSurface(stream, branch));
+      }
+      const value = Reflect.get(stream, prop, stream);
+      if (typeof value === "function") return value.bind(receiver);
+      return value;
+    },
+  });
+}
+
+/** Split one capturing iterator into two branches without restarting capture. */
+function teeCapturingStream<T>(
+  createIterator: () => AsyncIterator<T>,
+): [() => AsyncIterator<T>, () => AsyncIterator<T>] {
+  const left: Array<Promise<IteratorResult<T>>> = [];
+  const right: Array<Promise<IteratorResult<T>>> = [];
+  const iterator = createIterator();
+
+  const branchIterator = (queue: Array<Promise<IteratorResult<T>>>) => (): AsyncIterator<T> => ({
+    next: () => {
+      if (queue.length === 0) {
+        const result = iterator.next();
+        left.push(result);
+        right.push(result);
+      }
+      return queue.shift()!;
+    },
+    return: (value) => iterator.return?.(value) ?? Promise.resolve({ done: true as const, value: undefined }),
+    throw: (error) => iterator.throw?.(error) ?? Promise.reject(error),
+  });
+
+  return [branchIterator(left), branchIterator(right)];
 }
 
 export function normalizeMessages(input: unknown): ChatMessage[] {

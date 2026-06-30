@@ -23,8 +23,10 @@ type Event struct {
 	TokensUsed     int32
 }
 
-// EventListRow is the read shape (with agent_name joined and the latest
-// verdict when one exists).
+// EventListRow is the read shape returned by ListEvents (with
+// agent_name joined and the latest verdict when one exists). It omits
+// the full payload and token count because the list query does not
+// select them.
 type EventListRow struct {
 	ID             string
 	SessionID      string
@@ -33,12 +35,18 @@ type EventListRow struct {
 	AgentName      string
 	EventType      string
 	RunID          string
-	PayloadJSON    string
-	TokensUsed     int32
 	CreatedAt      time.Time
 	VerdictID      string
 	MADCode        string
 	Classification string
+}
+
+// EventDetailRow is the read shape returned by GetEvent. It extends
+// the list row with fields only selected by the detail query.
+type EventDetailRow struct {
+	EventListRow
+	PayloadJSON string
+	TokensUsed  int32
 }
 
 // TimelineRow is one entry in a session timeline: an event with its
@@ -136,7 +144,7 @@ func (s *Store) ListEvents(ctx context.Context, f EventFilters, perPage, offset 
 
 // GetEvent returns one event by id (with agent_name joined), or
 // ErrNotFound.
-func (s *Store) GetEvent(ctx context.Context, id string) (*EventListRow, error) {
+func (s *Store) GetEvent(ctx context.Context, id string) (*EventDetailRow, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT e.id, e.session_id, COALESCE(e.agent_id, ''), e.agent_profile_id,
 		        COALESCE(ap.name, ''), e.event_type, COALESCE(e.run_id, ''),
@@ -144,7 +152,7 @@ func (s *Store) GetEvent(ctx context.Context, id string) (*EventListRow, error) 
 		 FROM events e
 		 LEFT JOIN agent_profiles ap ON ap.id = e.agent_profile_id
 		 WHERE e.id = ?`, id)
-	r := &EventListRow{}
+	r := &EventDetailRow{}
 	var agentProfileID sql.NullString
 	var createdAt string
 	if err := row.Scan(&r.ID, &r.SessionID, &r.AgentID, &agentProfileID, &r.AgentName,

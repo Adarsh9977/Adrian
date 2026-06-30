@@ -166,7 +166,7 @@ func (s *Server) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func eventToResponse(r *store.EventListRow) eventResponse {
+func eventToResponse(r *store.EventDetailRow) eventResponse {
 	resp := eventResponse{
 		ID:             r.ID,
 		SessionID:      r.SessionID,
